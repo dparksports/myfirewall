@@ -307,7 +307,7 @@ class Program
     static void ManageBlockedIPsInteractive()
     {
         var conns = GetTcpConnections();
-        var activeIPs = conns.ToDictionary(c => c.RemoteIP, c => c.ProcessName);
+        var activeIPs = conns.GroupBy(c => c.RemoteIP).ToDictionary(g => g.Key, g => g.First().ProcessName);
         var allIPs = activeIPs.Keys.Union(BlockedIPs.Keys).Distinct().ToList();
 
         if (allIPs.Count == 0) return;
