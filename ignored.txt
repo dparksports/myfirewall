@@ -1,0 +1,4 @@
+chrome
+antigravity
+language_server_windows_x64
+autocommand
