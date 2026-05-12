@@ -102,7 +102,7 @@ class Program
 
     // --- State Variables ---
     static List<string> IgnoredProcesses = new();
-    static List<string> BlockedIPs = new();
+    static Dictionary<string, string> BlockedIPs = new();
     static Dictionary<string, string> DomainCache = new();
     static Dictionary<string, DateTime> ConnectionStartTimes = new();
     static EtwNetworkTracker? EtwTracker;
@@ -227,16 +227,16 @@ class Program
             grid.AddColumn();
             grid.AddColumn();
             
-            var bTable = new Table().Border(TableBorder.Rounded).AddColumn("[red]Blocked IPs[/]").AddColumn("Domain");
-            foreach (var ip in BlockedIPs) bTable.AddRow(ip, $"[blue]{GetCachedDomain(ip)}[/]");
-            if (BlockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "");
+            var bTable = new Table().Border(TableBorder.Rounded).AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain");
+            foreach (var kvp in BlockedIPs.OrderBy(x => x.Key)) bTable.AddRow(kvp.Key, $"[grey]{kvp.Value}[/]", $"[blue]{GetCachedDomain(kvp.Key)}[/]");
+            if (BlockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "");
 
             var iTable = new Table().Border(TableBorder.Rounded).AddColumn("[yellow]Ignored Procs[/]");
-            foreach (var proc in IgnoredProcesses) iTable.AddRow(proc);
+            foreach (var proc in IgnoredProcesses.OrderBy(x => x)) iTable.AddRow(proc);
             if (IgnoredProcesses.Count == 0) iTable.AddRow("[grey]None[/]");
 
             var dTable = new Table().Border(TableBorder.Rounded).AddColumn("[blue]Domain Cache (Last 15)[/]").AddColumn("Domain");
-            foreach (var kvp in DomainCache.TakeLast(15)) dTable.AddRow(kvp.Key, kvp.Value);
+            foreach (var kvp in DomainCache.OrderBy(x => x.Key).TakeLast(15)) dTable.AddRow(kvp.Key, kvp.Value);
             if (DomainCache.Count == 0) dTable.AddRow("[grey]None[/]", "");
 
             grid.AddRow(bTable, iTable, dTable);
@@ -307,28 +307,43 @@ class Program
     static void ManageBlockedIPsInteractive()
     {
         var conns = GetTcpConnections();
-        var activeIPs = conns.Select(c => c.RemoteIP).Distinct().ToList();
-        var allIPs = activeIPs.Union(BlockedIPs).Distinct().ToList();
+        var activeIPs = conns.ToDictionary(c => c.RemoteIP, c => c.ProcessName);
+        var allIPs = activeIPs.Keys.Union(BlockedIPs.Keys).Distinct().ToList();
 
         if (allIPs.Count == 0) return;
+
+        var choices = allIPs.Select(ip => {
+            string proc = activeIPs.ContainsKey(ip) ? activeIPs[ip] : (BlockedIPs.ContainsKey(ip) ? BlockedIPs[ip] : "Unknown");
+            return $"{ip} ({proc})";
+        }).ToList();
 
         var prompt = new MultiSelectionPrompt<string>()
             .Title("Select IPs to [red]BLOCK[/] (Space to toggle, Enter to save):")
             .NotRequired()
             .PageSize(15)
-            .AddChoices(allIPs);
+            .AddChoices(choices);
 
-        foreach (var blocked in BlockedIPs)
+        foreach (var ip in BlockedIPs.Keys)
         {
-            if (allIPs.Contains(blocked)) prompt.Select(blocked);
+            var choice = choices.FirstOrDefault(c => c.StartsWith(ip + " "));
+            if (choice != null) prompt.Select(choice);
         }
 
         var selected = AnsiConsole.Prompt(prompt);
+        var selectedIPs = selected.Select(s => s.Split(' ')[0]).ToList();
         
-        var newlyBlocked = selected.Except(BlockedIPs).ToList();
-        var newlyUnblocked = BlockedIPs.Except(selected).ToList();
+        var newlyBlocked = selectedIPs.Except(BlockedIPs.Keys).ToList();
+        var newlyUnblocked = BlockedIPs.Keys.Except(selectedIPs).ToList();
 
-        BlockedIPs = selected.ToList();
+        var newDict = new Dictionary<string, string>();
+        foreach(var s in selected)
+        {
+            string ip = s.Split(' ')[0];
+            string proc = s.Substring(ip.Length + 2).TrimEnd(')');
+            newDict[ip] = proc;
+        }
+
+        BlockedIPs = newDict;
         SaveBlockList();
 
         foreach (var ip in newlyBlocked)
@@ -338,7 +353,7 @@ class Program
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -Command \"New-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{ip}' -Direction Outbound -Action Block -RemoteAddress {ip}\"",
+                    Arguments = $"-NoProfile -Command \"New-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{BlockedIPs[ip]}-{ip}' -Direction Outbound -Action Block -RemoteAddress {ip}\"",
                     CreateNoWindow = true,
                     UseShellExecute = false
                 })?.WaitForExit();
@@ -352,7 +367,7 @@ class Program
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -Command \"Remove-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{ip}'\"",
+                    Arguments = $"-NoProfile -Command \"Remove-NetFirewallRule -DisplayName '*TCP-Monitor-Block*-{ip}'\"",
                     CreateNoWindow = true,
                     UseShellExecute = false
                 })?.WaitForExit();
@@ -495,16 +510,22 @@ class Program
     static void LoadAllData() {
         try {
             if (File.Exists("ignored.txt")) IgnoredProcesses = File.ReadAllLines("ignored.txt").ToList();
-            if (File.Exists("blocked.txt")) BlockedIPs = File.ReadAllLines("blocked.txt").ToList();
+            if (File.Exists("blocked.txt")) {
+                foreach (var line in File.ReadAllLines("blocked.txt")) {
+                    var parts = line.Split('|');
+                    if (parts.Length == 2) BlockedIPs[parts[0]] = parts[1];
+                    else BlockedIPs[line] = "Unknown";
+                }
+            }
         } catch { }
     }
 
     static void SaveAllData() {
         File.WriteAllLines("ignored.txt", IgnoredProcesses);
-        File.WriteAllLines("blocked.txt", BlockedIPs);
+        SaveBlockList();
     }
     static void SaveIgnoreList() => File.WriteAllLines("ignored.txt", IgnoredProcesses);
-    static void SaveBlockList() => File.WriteAllLines("blocked.txt", BlockedIPs);
+    static void SaveBlockList() => File.WriteAllLines("blocked.txt", BlockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value}"));
 }
 
 class TcpConnectionInfo

@@ -57,3 +57,6 @@ _ReSharper*/
 
 # Crash logs
 crash.log
+blocked.txt
+ignore.txt
+
