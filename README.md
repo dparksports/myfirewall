@@ -1,5 +1,7 @@
 # TCP Monitor
 
+![TCP Monitor](infographic.png)
+
 A lightweight, terminal-based TCP connection monitor for Windows, built with C# and .NET.
 
 ## Features
