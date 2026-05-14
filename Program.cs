@@ -103,6 +103,7 @@ class Program
     // --- State Variables ---
     static List<string> IgnoredProcesses = new();
     static Dictionary<string, string> BlockedIPs = new();
+    static HashSet<string> BlockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
     static Dictionary<string, string> DomainCache = new();
     static Dictionary<string, DateTime> ConnectionStartTimes = new();
     static EtwNetworkTracker? EtwTracker;
@@ -112,6 +113,9 @@ class Program
     static DateTime _lastGeoCall = DateTime.MinValue;
     static readonly TimeSpan GeoApiThrottle = TimeSpan.FromSeconds(1.5);
     static Dictionary<string, string> GeoCache = new();
+    static readonly List<string> AlertLog = new();
+    static readonly object AlertLock = new();
+    static readonly HashSet<int> AutoKilledPids = new();
 
     static void Main()
     {
@@ -132,6 +136,7 @@ class Program
         }
 
         LoadAllData();
+        RebuildBlockedProcessNames();
         EtwTracker = new EtwNetworkTracker();
         
         try {
@@ -154,6 +159,7 @@ class Program
             // Update UI every 2 seconds
             if ((DateTime.Now - lastRefresh).TotalSeconds >= 2)
             {
+                AutoEnforceBlockRules();
                 DrawScreen();
                 lastRefresh = DateTime.Now;
             }
@@ -219,6 +225,18 @@ class Program
         AnsiConsole.Write(table);
         AnsiConsole.MarkupLine($"[grey]Total Connections: {connections.Count} | ETW Status: {(EtwTracker!.IsRunning ? "[green]Active[/]" : "[red]Stopped[/]")}[/]");
         AnsiConsole.Write(new Rule());
+
+        // --- Alert Log ---
+        lock (AlertLock)
+        {
+            if (AlertLog.Count > 0)
+            {
+                AnsiConsole.MarkupLine("[bold red on black] ⚠  AUTO-BLOCK ALERTS [/]");
+                foreach (var alert in AlertLog.TakeLast(5))
+                    AnsiConsole.MarkupLine(alert);
+                AnsiConsole.Write(new Rule());
+            }
+        }
         
         if (ShowExtraLists)
         {
@@ -300,7 +318,7 @@ class Program
         }
 
         var selected = AnsiConsole.Prompt(prompt);
-        IgnoredProcesses = selected.ToList();
+        IgnoredProcesses = selected.Select(x => x.ToLower()).ToList();
         SaveIgnoreList();
     }
 
@@ -344,6 +362,7 @@ class Program
         }
 
         BlockedIPs = newDict;
+        RebuildBlockedProcessNames();
         SaveBlockList();
 
         foreach (var ip in newlyBlocked)
@@ -497,7 +516,14 @@ class Program
     static bool IsAdministrator() => new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
 
     static void RestartAsAdmin() {
-        try { Process.Start(new ProcessStartInfo { FileName = Process.GetCurrentProcess().MainModule!.FileName, UseShellExecute = true, Verb = "runas" }); } catch { }
+        try { 
+            Process.Start(new ProcessStartInfo { 
+                FileName = Process.GetCurrentProcess().MainModule!.FileName, 
+                UseShellExecute = true, 
+                Verb = "runas",
+                WorkingDirectory = Environment.CurrentDirectory
+            }); 
+        } catch { }
     }
 
     static void ShowHelp() {
@@ -509,15 +535,117 @@ class Program
 
     static void LoadAllData() {
         try {
-            if (File.Exists("ignored.txt")) IgnoredProcesses = File.ReadAllLines("ignored.txt").ToList();
+            if (File.Exists("ignored.txt")) {
+                IgnoredProcesses = File.ReadAllLines("ignored.txt")
+                                       .Where(x => !string.IsNullOrWhiteSpace(x))
+                                       .Select(x => x.Trim().ToLower())
+                                       .ToList();
+            }
             if (File.Exists("blocked.txt")) {
                 foreach (var line in File.ReadAllLines("blocked.txt")) {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
                     var parts = line.Split('|');
-                    if (parts.Length == 2) BlockedIPs[parts[0]] = parts[1];
-                    else BlockedIPs[line] = "Unknown";
+                    if (parts.Length == 2) BlockedIPs[parts[0].Trim()] = parts[1].Trim();
+                    else BlockedIPs[line.Trim()] = "Unknown";
                 }
             }
         } catch { }
+    }
+
+    static void RebuildBlockedProcessNames()
+    {
+        BlockedProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in BlockedIPs)
+        {
+            if (kvp.Value != "Unknown") {
+                BlockedProcessNames.Add(kvp.Value);
+            }
+            if (!IPAddress.TryParse(kvp.Key, out _)) {
+                // If the key is not an IP address, it's a process name
+                BlockedProcessNames.Add(kvp.Key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Scans all live TCP connections. If a connection's process name is in the
+    /// blocked list, it auto-adds a Windows Firewall outbound block rule for that
+    /// IP, kills the process, and appends an entry to the on-screen alert log.
+    /// </summary>
+    static void AutoEnforceBlockRules()
+    {
+        if (BlockedProcessNames.Count == 0) return;
+
+        // 1. Proactively terminate any running process that is in the block list
+        try
+        {
+            foreach (var p in Process.GetProcesses())
+            {
+                if (BlockedProcessNames.Contains(p.ProcessName))
+                {
+                    bool killed = false;
+                    lock (AlertLock)
+                    {
+                        killed = !AutoKilledPids.Add(p.Id);
+                    }
+
+                    if (!killed)
+                    {
+                        try 
+                        { 
+                            p.Kill(); 
+                            lock (AlertLock)
+                            {
+                                string alertTime = DateTime.Now.ToString("HH:mm:ss");
+                                AlertLog.Add($"[[{alertTime}]] [red bold]AUTO-KILL:[/] [white]{p.ProcessName}[/] (PID {p.Id}) terminated proactively");
+                                if (AlertLog.Count > 50) AlertLog.RemoveAt(0);
+                            }
+                        } 
+                        catch { }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // 2. Scan live connections to catch new IPs and block them
+        var conns = GetTcpConnections(includeIgnored: true);
+
+        foreach (var conn in conns)
+        {
+            if (!BlockedProcessNames.Contains(conn.ProcessName)) continue;
+
+            string alertTime = DateTime.Now.ToString("HH:mm:ss");
+            bool newIp = !BlockedIPs.ContainsKey(conn.RemoteIP);
+
+            // Add to in-memory block list and persist
+            if (newIp)
+            {
+                BlockedIPs[conn.RemoteIP] = conn.ProcessName;
+                RebuildBlockedProcessNames();
+                SaveBlockList();
+
+                // Add Windows Firewall rule for new IP
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = $"-NoProfile -Command \"New-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{conn.ProcessName}-{conn.RemoteIP}' -Direction Outbound -Action Block -RemoteAddress {conn.RemoteIP}\"",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    })?.WaitForExit();
+                }
+                catch { }
+
+                // Log alert
+                lock (AlertLock)
+                {
+                    AlertLog.Add($"[[{alertTime}]] [red bold]AUTO-BLOCK:[/] [white]{conn.ProcessName}[/] (PID {conn.PID}) tried to connect → [yellow]{conn.RemoteIP}[/] (NEW IP blocked)");
+                    if (AlertLog.Count > 50) AlertLog.RemoveAt(0); // Keep log bounded
+                }
+            }
+        }
     }
 
     static void SaveAllData() {
