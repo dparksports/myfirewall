@@ -308,7 +308,7 @@ class Program
 
     static void Main()
     {
-        Console.Title = "TCP Monitor v4.0";
+        Console.Title = "TCP Monitor v3.0";
 
         // Fix #11/#12: Global error handling + cleanup on any exit path
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>

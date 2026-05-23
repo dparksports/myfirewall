@@ -96,5 +96,52 @@ namespace MyFirewall.Desktop.Services
                 catch (Exception ex) { _logError($"FirewallService.RemoveBlockRule({ip}): {ex}"); }
             }
         }
+
+        /// <summary>
+        /// Returns the number of TCP-Monitor firewall rules currently active.
+        /// </summary>
+        public int GetRuleCount()
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    var policy = GetPolicy();
+                    if (policy is null) return 0;
+                    int count = 0;
+                    foreach (INetFwRule r in policy.Rules)
+                        if (r.Name.StartsWith(FirewallRulePrefix)) count++;
+                    return count;
+                }
+                catch (Exception ex)
+                {
+                    _logError($"FirewallService.GetRuleCount: {ex.Message}");
+                    return 0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns all TCP-Monitor firewall rules as (RuleName, IP, Enabled) tuples.
+        /// </summary>
+        public List<(string Name, string IP, bool Enabled)> GetAllRules()
+        {
+            var rules = new List<(string, string, bool)>();
+            lock (_fwLock)
+            {
+                try
+                {
+                    var policy = GetPolicy();
+                    if (policy is null) return rules;
+                    foreach (INetFwRule r in policy.Rules)
+                    {
+                        if (r.Name.StartsWith(FirewallRulePrefix))
+                            rules.Add((r.Name, r.RemoteAddresses ?? "", r.Enabled));
+                    }
+                }
+                catch (Exception ex) { _logError($"FirewallService.GetAllRules: {ex.Message}"); }
+            }
+            return rules;
+        }
     }
 }
