@@ -21,6 +21,7 @@ namespace MyFirewall.Desktop.Services
         private readonly object _lock = new();
         private readonly Action<string> _logError;
         private readonly GeoIpService _geoIpService;
+        private bool _disposed;
 
         private readonly Dictionary<string, DateTime> _connectionStartTimes = new();
         public bool IsRunning { get; private set; }
@@ -68,7 +69,20 @@ namespace MyFirewall.Desktop.Services
         }
 
         public void Stop() => Dispose();
-        public void Dispose() => _session?.Dispose();
+
+        /// <summary>
+        /// Returns aggregate (TotalSent, TotalReceived) across all tracked PIDs.
+        /// </summary>
+        public (long TotalSent, long TotalReceived) GetTotalTrafficStats()
+        {
+            lock (_lock)
+            {
+                long sent = 0, recv = 0;
+                foreach (var v in _bytesSent.Values) sent += v;
+                foreach (var v in _bytesReceived.Values) recv += v;
+                return (sent, recv);
+            }
+        }
 
         [DllImport("iphlpapi.dll", SetLastError = true)]
         private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int dwOutBufLen, bool sort, int ipVersion, int tblClass, uint reserved = 0);
@@ -86,6 +100,14 @@ namespace MyFirewall.Desktop.Services
             public uint dwRemoteAddr;
             public uint dwRemotePort;
             public uint dwOwningPid;
+        }
+
+        /// <summary>
+        /// Converts a network-byte-order port (from the TCP table) to host-byte-order.
+        /// </summary>
+        private static int NetworkToHostPort(uint rawPort)
+        {
+            return IPAddress.NetworkToHostOrder((short)(rawPort & 0xFFFF)) & 0xFFFF;
         }
 
         public List<ConnectionInfo> GetConnections(HashSet<string> ignoredApps, Dictionary<string, string> blockedIPs, HashSet<string> blockedProcessNames)
@@ -136,12 +158,21 @@ namespace MyFirewall.Desktop.Services
 
                         bool isBlocked = blockedIPs.ContainsKey(remoteIP) || blockedProcessNames.Contains(appName);
 
+                        int remotePort = NetworkToHostPort(row.dwRemotePort);
+                        int localPort = NetworkToHostPort(row.dwLocalPort);
+
+                        // Get geo info with country code
+                        var geoResult = _geoIpService.GetCachedGeoWithCode(remoteIP);
+
                         list.Add(new ConnectionInfo
                         {
                             ApplicationName = appName,
                             PID = pid,
                             Destination = remoteIP,
-                            Location = _geoIpService.GetCachedGeo(remoteIP),
+                            RemotePort = remotePort,
+                            LocalPort = localPort,
+                            Location = geoResult.Display,
+                            CountryCode = geoResult.CountryCode,
                             Domain = _geoIpService.GetCachedDomain(remoteIP),
                             Duration = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
                             UploadBytes = sent,
@@ -173,7 +204,11 @@ namespace MyFirewall.Desktop.Services
                         try
                         {
                             p.Kill();
-                            alerts.Add(new AlertEntry { Message = $"⚠ Stopped {p.ProcessName} automatically" });
+                            alerts.Add(new AlertEntry
+                            {
+                                Message = $"Stopped {p.ProcessName} (PID {p.Id}) automatically",
+                                Severity = AlertSeverity.Critical
+                            });
                         }
                         catch (Exception ex) { _logError($"AutoKill({p.Id}): {ex.Message}"); }
                     }
@@ -192,10 +227,41 @@ namespace MyFirewall.Desktop.Services
                 blockedIPs[conn.Destination] = conn.ApplicationName;
                 bool added = fwService.AddBlockRule(conn.Destination, conn.ApplicationName);
 
-                alerts.Add(new AlertEntry { Message = $"⚠ Blocked new connection to {conn.Destination} from {conn.ApplicationName}" });
+                alerts.Add(new AlertEntry
+                {
+                    Message = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
+                    Severity = AlertSeverity.Warning
+                });
             }
 
             return alerts;
+        }
+
+        /// <summary>
+        /// Prune autoKilledPids to remove entries for PIDs that no longer exist.
+        /// Prevents unbounded growth of the set.
+        /// </summary>
+        public static void PruneStaleKilledPids(HashSet<int> autoKilledPids)
+        {
+            if (autoKilledPids.Count < 50) return; // Only prune when it gets large
+
+            var activePids = new HashSet<int>();
+            try
+            {
+                foreach (var p in Process.GetProcesses())
+                    activePids.Add(p.Id);
+            }
+            catch { return; }
+
+            autoKilledPids.RemoveWhere(pid => !activePids.Contains(pid));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _session?.Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 }

@@ -14,7 +14,7 @@ namespace MyFirewall.Desktop.Services
         private const int GeoMaxRetries = 3;
         
         private readonly Dictionary<string, string> _domainCache = new();
-        private readonly Dictionary<string, string> _geoCache = new();
+        private readonly Dictionary<string, (string Display, string CountryCode)> _geoCache = new();
         private readonly SemaphoreSlim _geoSemaphore = new(1, 1);
         private DateTime _lastGeoCall = DateTime.MinValue;
         private readonly TimeSpan _geoApiThrottle = TimeSpan.FromSeconds(1.5);
@@ -32,15 +32,26 @@ namespace MyFirewall.Desktop.Services
             return "...";
         }
 
+        /// <summary>
+        /// Returns cached geo display string (backward compatible).
+        /// </summary>
         public string GetCachedGeo(string ip)
         {
-            if (_geoCache.TryGetValue(ip, out var geo)) return geo;
-            _geoCache[ip] = "...";
-            Task.Run(async () => { _geoCache[ip] = await GeoIpLookupAsync(ip); });
-            return "...";
+            return GetCachedGeoWithCode(ip).Display;
         }
 
-        private async Task<string> GeoIpLookupAsync(string ip)
+        /// <summary>
+        /// Returns cached geo info including the country code for flag emoji rendering.
+        /// </summary>
+        public (string Display, string CountryCode) GetCachedGeoWithCode(string ip)
+        {
+            if (_geoCache.TryGetValue(ip, out var geo)) return geo;
+            _geoCache[ip] = ("...", "");
+            Task.Run(async () => { _geoCache[ip] = await GeoIpLookupAsync(ip); });
+            return ("...", "");
+        }
+
+        private async Task<(string Display, string CountryCode)> GeoIpLookupAsync(string ip)
         {
             await _geoSemaphore.WaitAsync();
             try
@@ -76,16 +87,17 @@ namespace MyFirewall.Desktop.Services
                             if (space > 0) org = org[(space + 1)..];
                         }
 
-                        return string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
+                        string display = string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
+                        return (display, code);
                     }
                     catch
                     {
-                        if (attempt == GeoMaxRetries - 1) return "N/A";
+                        if (attempt == GeoMaxRetries - 1) return ("N/A", "");
                         await Task.Delay(delay);
                         delay *= 2;
                     }
                 }
-                return "N/A";
+                return ("N/A", "");
             }
             finally { _geoSemaphore.Release(); }
         }

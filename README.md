@@ -1,108 +1,124 @@
-# 🔒 TCP Monitor (MyFirewall)
+# 🛡️ Enterprise TCP Monitor (MyFirewall) v3.0
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
 [![Framework](https://img.shields.io/badge/.NET-8.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
 [![License](https://img.shields.io/badge/license-Apache%202.0-yellow.svg)](LICENSE)
 
-TCP Monitor is a high-performance, console-based network security tool built in C# for Windows. It taps directly into the Windows kernel using **Event Tracing for Windows (ETW)** to trace active TCP connections, resolve geolocations/domains with aggressive throttling, and proactively block malicious processes and remote IPs instantly and silently through the **native Windows Firewall COM API (HNetCfg)**.
+**Enterprise TCP Monitor** is an ultra-high performance, dual-interface network security and active host defense system built in C# for enterprise Windows environments. It intercepts outbound traffic at the kernel level using **Event Tracing for Windows (ETW)**, resolves geolocations and domain names asynchronously, and dynamically enforces active-blocking defense policies in under 1 millisecond using **direct in-process Windows Firewall COM API (HNetCfg)** interop.
+
+The suite features both a responsive console dashboard for servers and a premium, GPU-accelerated WPF Desktop application for workstations.
 
 ---
 
-## 🚀 Key Architectural Breakthroughs (v4.0)
+## 🚀 Enterprise Architectural Design
 
-In this version, the entire backend was refactored to eliminate overhead and fix critical performance bottlenecks:
-
-1. **Native Firewall Integration (No PowerShell Spawning)**: Removed slow and heavy `powershell.exe -Command "New-NetFirewallRule ..."` spawning which flooded the Windows Event Log (Event ID 4104). It now communicates directly with `HNetCfg.FwPolicy2` COM object in-process, completing rule changes in under 1 millisecond.
-2. **Auto-Kill Logic Fixed**: Resolved the inverted PID termination bug so blocked processes are terminated proactively and accurately exactly once, rather than spawning infinite polling processes.
-3. **Smart Deduplication & Validation**: Every IP is validated before being processed, and duplicate Windows Firewall rules are prevented using strict in-memory hash check checks (`RuleExists`).
-4. **ETW Network Sniffing**: Uses kernel-level tracers (`TcpIpSend`/`TcpIpRecv`) to accurately report bytes sent and received per process with near-zero performance overhead.
-5. **Robust GeoIP Throttling & Backoff**: Standardized async queries with a `SemaphoreSlim(1,1)` serial queue to respect third-party rate limits, and implemented exponential backoff retries.
+1. **Direct In-Process Firewall Control (Sub-Millisecond Execution)**: 
+   Replaces slow, heavy `powershell.exe` command spawns which flood Windows Event Log (Event ID 4104). By communicating directly with the `HNetCfg.FwPolicy2` COM object, firewall rule creation and removal happen instantaneously with zero CPU overhead.
+   
+2. **Kernel-Level ETW Network Sniffing**: 
+   Taps directly into kernel socket providers (`TcpIpSend`/`TcpIpRecv`) to measure upload and download throughput per process ID in real-time, bypassing user-mode API limitations.
+   
+3. **Autopilot Defense & Threat Termination**: 
+   Monitors connection behaviors and automatically terminates blacklisted process IDs while dynamically adding firewall rules to block new remote destination IPs contacted by those threats.
+   
+4. **Smart-Diff Zero-Flicker Grid**: 
+   The WPF Desktop application utilizes an efficient in-memory hash diffing mechanism to update the UI connections grid. It preserves selections, scrolling, and column sorting, eliminating grid flicker entirely.
+   
+5. **Throttled GeoIP Queue & Resilient Backoff**: 
+   Protects upstream rate limits with a serialized queue wrapper and exponential backoff retry mechanism.
+   
+6. **Graceful UAC Elevation Fallback**: 
+   The console application elevates automatically, while the desktop app performs a silent elevation request on launch. If the user declines admin privilege, the desktop app falls back to a clean, read-only "No Admin" mode, informing the user instead of crashing or exiting.
 
 ---
 
 ## 📊 System Architecture & Process Flow
 
-The system operates via a decoupled, highly structured workflow:
-
 ```mermaid
 graph TD
-    A[Windows Kernel Stack] -->|ETW NetworkTCPIP events| B[EtwNetworkTracker]
-    C[iphlpapi.dll GetExtendedTcpTable] -->|TCP Table Polling| D[Main Loop Snapshot]
+    A[Windows Kernel Stack] -->|ETW Socket Events| B[EtwNetworkTracker]
+    C[iphlpapi.dll GetExtendedTcpTable] -->|TCP Table Snapshots| D[Data Aggregation & Diff Engine]
     B -->|Bytes Sent / Received| D
-    D -->|1. Enforce State| E[AutoEnforceBlockRules]
-    D -->|2. Render View| F[Spectre.Console Live Feed]
-    E -->|Proactive Kill| G[Process.Kill]
-    E -->|In-Process Outbound Block| H[Native COM Firewall API]
+    D -->|1. Live Updates| F[UI Dashboards: Console / WPF Desktop]
+    D -->|2. Enforce Security Policy| E[Defense Coordinator]
+    E -->|Threat Neutralization| G[Process.Kill]
+    E -->|Instant Host Block| H[Native COM Firewall API]
 ```
 
 ---
 
-## 🖥️ Live Terminal Interface
+## 🎨 System Infographics
 
-The program leverages a premium command-line dashboard powered by `Spectre.Console`:
-
-![TCP Monitor Terminal Mockup](assets/dashboard.png)
+![Enterprise TCP Monitor Infographic](assets/infographic.png)
 
 ---
 
-## ✨ Features
+## ✨ Features & Capabilities
 
-- 🛰️ **Kernel-Level ETW Tracing**: Real-time measurement of total uploaded and downloaded traffic per process.
-- 🌍 **GeoIP & Org Resolution**: Identifies the destination country and ISP/Organization for remote connection endpoints.
-- 🛑 **Native Proactive Defense**:
-  - Automatically terminates running instances of blocked processes.
-  - Automatically registers outbound block rules for new remote IPs contacted by blocked processes.
-- ⌨️ **Interactive UI Controls**: Quick action keys to block, ignore, kill, or review details on the fly.
-- 📝 **Preserved Manual Configuration**: The ignore list file (`ignored.txt`) is no longer overwritten dynamically during loops; manual edits are fully respected and only updated when explicitly requested in-app or on graceful exit.
-- 📂 **Centralized Logging**: Diagnostic warnings and COM exceptions are cleanly recorded in `crash.log`.
+- 🛸 **GPU-Accelerated Desktop UI**: Dark theme utilizing glassmorphism styles, glowing status badges, active alert feeds, and responsive user interaction.
+- ⚡ **Spectre.Console CLI**: Low-overhead terminal dashboard for server deployments with keyboard hotkeys.
+- 🌍 **GeoIP & ISP Lookup**: Flags remote IP geolocations, organizations, and domain names instantly.
+- ⚙️ **Manual Overrides**: Persisted configurations are safely updated and maintained without dynamic overwrites.
+- 📁 **Centralized Diagnostics**: Complete logging of system events and exceptions in `crash.log`.
 
 ---
 
-## ⚙️ Configuration Files
+## ⌨️ Hotkeys & Control Map
 
-All data is persisted locally in simple, human-readable plain-text files:
-
-- **`blocked.txt`**: List of blocked IP addresses and their associated process name (format: `IP|ProcessName`).
-- **`ignored.txt`**: List of process names to ignore and filter out from the active feed (one name per line).
-- **`crash.log`**: Errors, COM exceptions, or network diagnostic failures.
-
----
-
-## 🎹 Keyboard Controls
-
-| Key | Action | Description |
+| Key (Console) | WPF Action | Description |
 |:---:|:---|:---|
-| **`Q`** | **Quit** | Gracefully disposes the ETW session, saves lists, and exits. |
-| **`K`** | **Kill Process** | Interactively select and terminate any running TCP process. |
-| **`B`** | **Block IP** | Interactively block or unblock specific remote IPs via Windows Firewall. |
-| **`I`** | **Ignore Process** | Add or remove process names to filter out of the terminal feed. |
-| **`L`** | **Toggle Lists** | Expand grid view showing all Blocked IPs, Ignored Processes, and Domain Cache. |
-| **`H / F1`** | **Help Screen** | Review application status, controls, and configuration details. |
+| **`Q`** | **Close Window** | Gracefully shuts down active ETW kernel sessions, flushes buffers, and exits. |
+| **`K`** | **Stop Process** | Terminate any active process selected from the list. |
+| **`B`** | **Block IP** | Manually add/remove firewall outbound block rules for IPs. |
+| **`I`** | **Hide App** | Ignore specific process names to clean up live dashboards. |
+| **`L`** | **Toggle Lists** | Expand sidebar lists displaying all blocked IPs, hidden apps, and domain cache. |
+| **`H / F1`** | **Help screen** | Displays active configuration directories, ETW states, and quick help. |
 
 ---
 
-## 🛠️ Build & Run Requirements
+## 🛠️ Build & Run Instructions
 
-- **Operating System**: Windows (required for ETW kernel sessions and Windows Firewall COM interop).
-- **Permissions**: Must be run with **Administrator privileges** to register the kernel trace session and apply firewall rules.
+- **OS**: Windows 10 / 11 or Windows Server (required for ETW and COM Firewall).
 - **Framework**: .NET 8.0 SDK or later.
 
-### Quick Start
+### Building from Source
 
-1. Open PowerShell or Command Prompt as **Administrator**.
-2. Navigate to the project directory.
-3. Build the application:
-   ```bash
-   dotnet build --configuration Release
-   ```
-4. Run the executable:
-   ```bash
-   dotnet run
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/dparksports/myfirewall.git
+cd myfirewall
+
+# Build the solution in Release configuration
+dotnet build --configuration Release
+```
+
+### Running the CLI Console Edition
+Run PowerShell or Cmd as **Administrator**:
+```bash
+dotnet run --project MyFirewall.csproj
+```
+
+### Running the Desktop GUI Edition
+Double-click the executable or run via CLI. It will prompt for UAC elevation automatically:
+```bash
+dotnet run --project MyFirewall.Desktop/MyFirewall.Desktop.csproj
+```
+
+---
+
+## 📂 Configuration Storage
+
+Files are stored in the application directory:
+- **`blocked.txt`**: Active block rules (format: `IP|ProcessName`).
+- **`ignored.txt`**: Hushed processes (one per line).
+- **`crash.log`**: Diagnostics, exceptions, and event summaries.
 
 ---
 
 ## 🛡️ License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+
+***
+made with a heart in california
