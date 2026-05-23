@@ -6,9 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>3.0.0</Version>
-    <AssemblyVersion>3.0.0.0</AssemblyVersion>
-    <FileVersion>3.0.0.0</FileVersion>
+    <Version>5.0.0</Version>
+    <AssemblyVersion>5.0.0.0</AssemblyVersion>
+    <FileVersion>5.0.0.0</FileVersion>
     <DefaultItemExcludes>MyFirewall.Desktop\**;$(DefaultItemExcludes)</DefaultItemExcludes>
   </PropertyGroup>
 

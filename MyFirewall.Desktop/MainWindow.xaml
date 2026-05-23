@@ -518,7 +518,7 @@
                     </StackPanel>
 
                     <!-- Version -->
-                    <TextBlock Grid.Column="4" Text="v3.0" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="4" Text="v5.0" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                 </Grid>
             </Border>
 
