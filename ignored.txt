@@ -1,4 +1,3 @@
-language_server_windows_x64
 chrome
-antigravity
-autocommand
+language_server
+myfirewall
