@@ -14,14 +14,102 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Windows Firewall COM interop types  (replaces powershell.exe spawning)
+// ─────────────────────────────────────────────────────────────────────────────
+[ComImport, Guid("98325047-C671-4174-8D81-DEFCD3F03186"), CoClass(typeof(NetFwPolicy2Class))]
+interface INetFwPolicy2
+{
+    [DispId(1)]  int CurrentProfileTypes { get; }
+    [DispId(2)]  bool FirewallEnabled { [param: In] set; get; }
+    [DispId(3)]  object ExcludedInterfaces { [param: In] set; get; }
+    [DispId(4)]  bool BlockAllInboundTraffic { [param: In] set; get; }
+    [DispId(5)]  bool NotificationsDisabled { [param: In] set; get; }
+    [DispId(6)]  bool UnicastResponsesToMulticastBroadcastDisabled { [param: In] set; get; }
+    [DispId(7)]  INetFwRules Rules { get; }
+    [DispId(8)]  object ServiceRestriction { get; }
+    [DispId(9)]  void EnableRuleGroup(int profileTypesBitmask, string group, bool enable);
+    [DispId(10)] bool IsRuleGroupEnabled(int profileTypesBitmask, string group);
+    [DispId(11)] void RestoreLocalFirewallDefaults();
+    [DispId(12)] object DefaultInboundAction  { [param: In] set; get; }
+    [DispId(13)] object DefaultOutboundAction { [param: In] set; get; }
+    [DispId(14)] bool IsRuleGroupCurrentlyEnabled(string group);
+    [DispId(15)] object LocalPolicyModifyState { get; }
+}
+
+[ComImport, Guid("D46D2478-9AC9-4008-9DC7-5563CE5536CC")]
+class NetFwPolicy2Class { }
+
+[ComImport, Guid("9C4C6277-5027-441E-AFAE-CA1F542DA009")]
+interface INetFwRules : System.Collections.IEnumerable
+{
+    [DispId(1)]  int Count { get; }
+    [DispId(2)]  void Add(INetFwRule rule);
+    [DispId(3)]  void Remove(string name);
+    [DispId(4)]  INetFwRule Item(string name);
+}
+
+[ComImport, Guid("AF230D27-BABA-4E42-ACED-F524F22CFCE2"), CoClass(typeof(NetFwRuleClass))]
+interface INetFwRule
+{
+    [DispId(1)]  string Name          { [param: In] set; get; }
+    [DispId(2)]  string Description   { [param: In] set; get; }
+    [DispId(3)]  string ApplicationName { [param: In] set; get; }
+    [DispId(4)]  string serviceName   { [param: In] set; get; }
+    [DispId(5)]  int    Protocol      { [param: In] set; get; }
+    [DispId(6)]  string LocalPorts    { [param: In] set; get; }
+    [DispId(7)]  string RemotePorts   { [param: In] set; get; }
+    [DispId(8)]  string LocalAddresses  { [param: In] set; get; }
+    [DispId(9)]  string RemoteAddresses { [param: In] set; get; }
+    [DispId(10)] string IcmpTypesAndCodes { [param: In] set; get; }
+    [DispId(11)] object Direction     { [param: In] set; get; }
+    [DispId(12)] object Interfaces    { [param: In] set; get; }
+    [DispId(13)] string InterfaceTypes { [param: In] set; get; }
+    [DispId(14)] bool   Enabled       { [param: In] set; get; }
+    [DispId(15)] string Grouping      { [param: In] set; get; }
+    [DispId(16)] int    Profiles      { [param: In] set; get; }
+    [DispId(17)] bool   EdgeTraversal { [param: In] set; get; }
+    [DispId(18)] object Action        { [param: In] set; get; }
+}
+
+[ComImport, Guid("2C5BC43E-3369-4C33-AB0C-BE9469677AF4")]
+class NetFwRuleClass { }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 class Program
 {
-    // --- Windows API for TCP Table ---
+    #region Constants
+
+    private const int    RefreshIntervalSeconds  = 3;
+    private const int    MaxAlertLogEntries       = 50;
+    private const string FirewallRulePrefix       = "TCP-Monitor-Block";
+    private const string BlockedFile              = "blocked.txt";
+    private const string IgnoredFile              = "ignored.txt";
+    private const string CrashLogFile             = "crash.log";
+    private const string EtwLogFile               = "etw_error.log";
+    private const string GeoApiBase               = "http://ip-api.com/json/";
+    private const double GeoThrottleSeconds       = 1.5;
+    private const int    GeoMaxRetries            = 3;
+
+    // NET_FW_ACTION_ and NET_FW_RULE_DIR_ enum values for COM interop
+    private const int NET_FW_ACTION_BLOCK  = 0;
+    private const int NET_FW_RULE_DIR_OUT  = 2;
+    private const int NET_FW_IP_PROTOCOL_ANY = 256;
+
+    #endregion
+
+    #region Windows API — TCP Table
+
     [DllImport("iphlpapi.dll", SetLastError = true)]
-    private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int dwOutBufLen, bool sort, int ipVersion, int tblClass, uint reserved = 0);
-    private const int AF_INET = 2;
+    private static extern uint GetExtendedTcpTable(
+        IntPtr pTcpTable, ref int dwOutBufLen, bool sort,
+        int ipVersion, int tblClass, uint reserved = 0);
+
+    private const int AF_INET                = 2;
     private const int TCP_TABLE_OWNER_PID_ALL = 5;
+    private const uint TCP_STATE_ESTABLISHED  = 5;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MIB_TCPROW_OWNER_PID
@@ -34,12 +122,111 @@ class Program
         public uint dwOwningPid;
     }
 
-    // --- ETW Tracker (The Engine) ---
+    #endregion
+
+    #region FirewallManager — Native COM (no powershell.exe)
+
+    /// <summary>
+    /// Manages Windows Firewall rules via the native HNetCfg COM API.
+    /// All calls are in-process and silent — no powershell.exe spawning.
+    /// </summary>
+    static class FirewallManager
+    {
+        // Lock so concurrent calls from async tasks don't corrupt COM state
+        private static readonly object _fwLock = new();
+
+        private static INetFwPolicy2? GetPolicy()
+        {
+            var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", throwOnError: false);
+            return type is null ? null : (INetFwPolicy2?)Activator.CreateInstance(type);
+        }
+
+        /// <summary>Returns true if any rule with the given display name already exists.</summary>
+        public static bool RuleExists(string ip)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    var policy = GetPolicy();
+                    if (policy is null) return false;
+                    foreach (INetFwRule r in policy.Rules)
+                        if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
+                            return true;
+                }
+                catch (Exception ex) { LogCrash($"FirewallManager.RuleExists: {ex.Message}"); }
+                return false;
+            }
+        }
+
+        /// <summary>Adds an outbound block rule for the given IP. No-ops if the rule already exists.</summary>
+        public static bool AddBlockRule(string ip, string processName)
+        {
+            if (!IsValidIP(ip)) return false;
+            if (RuleExists(ip)) return false; // Fix #3: deduplication
+
+            lock (_fwLock)
+            {
+                try
+                {
+                    var policy = GetPolicy();
+                    if (policy is null) { LogCrash("FirewallManager: Could not acquire HNetCfg.FwPolicy2"); return false; }
+
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+                    var rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+
+                    rule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
+                    rule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
+                    rule.Protocol        = NET_FW_IP_PROTOCOL_ANY;
+                    rule.RemoteAddresses = ip;
+                    rule.Direction       = NET_FW_RULE_DIR_OUT;
+                    rule.Action          = NET_FW_ACTION_BLOCK;
+                    rule.Enabled         = true;
+                    rule.Profiles        = 0x7FFFFFFF; // All profiles
+
+                    policy.Rules.Add(rule);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"FirewallManager.AddBlockRule({ip}): {ex}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>Removes all TCP-Monitor block rules matching the given IP.</summary>
+        public static void RemoveBlockRule(string ip)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    var policy = GetPolicy();
+                    if (policy is null) return;
+
+                    var toRemove = new List<string>();
+                    foreach (INetFwRule r in policy.Rules)
+                        if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
+                            toRemove.Add(r.Name);
+
+                    foreach (var name in toRemove)
+                        policy.Rules.Remove(name);
+                }
+                catch (Exception ex) { LogCrash($"FirewallManager.RemoveBlockRule({ip}): {ex}"); }
+            }
+        }
+    }
+
+    #endregion
+
+    #region ETW Tracker
+
     public class EtwNetworkTracker : IDisposable
     {
         private static readonly string SessionName = KernelTraceEventParser.KernelSessionName;
         private TraceEventSession? _session;
-        private readonly Dictionary<int, long> _bytesSent = new();
+        private readonly Dictionary<int, long> _bytesSent     = new();
         private readonly Dictionary<int, long> _bytesReceived = new();
         private readonly object _lock = new();
         public bool IsRunning { get; private set; }
@@ -48,87 +235,94 @@ class Program
         {
             try
             {
-                // 1. Force stop any previous session left over
+                // Force-stop any leftover session from a prior crash
                 using (var existing = new TraceEventSession(SessionName))
-                {
                     existing.Stop(noThrow: true);
-                }
-                
-                // 2. IMPORTANT: Windows needs a moment to release the kernel handle
-                Thread.Sleep(500); 
 
-                _session = new TraceEventSession(SessionName);
-                _session.StopOnDispose = true;
+                Thread.Sleep(500); // Windows needs a moment to release the kernel handle
+
+                _session = new TraceEventSession(SessionName) { StopOnDispose = true };
                 _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
 
                 _session.Source.Kernel.TcpIpSend += data =>
                 {
-                    lock (_lock) { _bytesSent[data.ProcessID] = _bytesSent.GetValueOrDefault(data.ProcessID) + data.size; }
+                    lock (_lock)
+                        _bytesSent[data.ProcessID] = _bytesSent.GetValueOrDefault(data.ProcessID) + data.size;
                 };
-
                 _session.Source.Kernel.TcpIpRecv += data =>
                 {
-                    lock (_lock) { _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size; }
+                    lock (_lock)
+                        _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
                 };
 
-                // Run processing in background
-                Task.Run(() => {
-                    try {
-                        IsRunning = true;
-                        _session.Source.Process();
-                    }
-                    catch (Exception ex) {
-                        File.AppendAllText("etw_error.log", $"{DateTime.Now}: {ex}\n");
-                    }
+                Task.Run(() =>
+                {
+                    try   { IsRunning = true; _session.Source.Process(); }
+                    catch (Exception ex) { File.AppendAllText(EtwLogFile, $"{DateTime.Now}: {ex}\n"); }
                     finally { IsRunning = false; }
                 });
             }
             catch (Exception ex)
             {
-                throw new Exception("ETW Initialization failed. Check if you are truly running as Admin.", ex);
+                throw new Exception("ETW initialization failed. Are you running as Administrator?", ex);
             }
         }
 
         public (long Sent, long Received) GetStats(int pid)
         {
             lock (_lock)
-            {
                 return (_bytesSent.GetValueOrDefault(pid), _bytesReceived.GetValueOrDefault(pid));
-            }
         }
 
         public void Dispose() => _session?.Dispose();
     }
 
-    // --- State Variables ---
-    static List<string> IgnoredProcesses = new();
-    static Dictionary<string, string> BlockedIPs = new();
-    static HashSet<string> BlockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
-    static Dictionary<string, string> DomainCache = new();
-    static Dictionary<string, DateTime> ConnectionStartTimes = new();
-    static EtwNetworkTracker? EtwTracker;
-    static bool Running = true;
-    static bool ShowExtraLists = false;
-    static readonly HttpClient _http = new HttpClient();
-    static DateTime _lastGeoCall = DateTime.MinValue;
-    static readonly TimeSpan GeoApiThrottle = TimeSpan.FromSeconds(1.5);
-    static Dictionary<string, string> GeoCache = new();
-    static readonly List<string> AlertLog = new();
-    static readonly object AlertLock = new();
-    static readonly HashSet<int> AutoKilledPids = new();
+    #endregion
+
+    #region State
+
+    static List<string>              _ignoredProcesses    = new();
+    static Dictionary<string, string> _blockedIPs         = new();
+    static HashSet<string>           _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
+    static Dictionary<string, string> _domainCache        = new();
+    static Dictionary<string, DateTime> _connectionStartTimes = new();
+    static EtwNetworkTracker?        _etwTracker;
+    static volatile bool             _running             = true;
+    static bool                      _showExtraLists      = false;
+    static readonly HttpClient       _http                = new();
+    static readonly SemaphoreSlim    _geoSemaphore        = new(1, 1); // Fix #8: serial throttle
+    static DateTime                  _lastGeoCall         = DateTime.MinValue;
+    static readonly TimeSpan         _geoApiThrottle      = TimeSpan.FromSeconds(GeoThrottleSeconds);
+    static Dictionary<string, string> _geoCache           = new();
+    static readonly List<string>     _alertLog            = new();
+    static readonly object           _alertLock           = new();
+    static readonly HashSet<int>     _autoKilledPids      = new();
+
+    // Cached connection list shared between DrawScreen and AutoEnforceBlockRules
+    static List<TcpConnectionInfo>   _lastConnections     = new();
+    static int                       _prevRowCount        = 0;
+
+    #endregion
+
+    #region Entry Point
 
     static void Main()
     {
-        Console.Title = "TCP Monitor v3.8";
+        Console.Title = "TCP Monitor v4.0";
 
-        // Global Error Handling
-        AppDomain.CurrentDomain.UnhandledException += (s, e) => {
-            File.AppendAllText("crash.log", $"[{DateTime.Now}] CRITICAL: {e.ExceptionObject}\n");
+        // Fix #11/#12: Global error handling + cleanup on any exit path
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            LogCrash($"UNHANDLED: {e.ExceptionObject}");
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            _etwTracker?.Dispose();
+            SaveAllData();
         };
 
         if (!IsAdministrator())
         {
-            AnsiConsole.MarkupLine("[bold red]ERROR:[/] You must run this as Administrator for ETW tracing.");
+            AnsiConsole.MarkupLine("[bold red]ERROR:[/] This program must run as Administrator for ETW tracing.");
             AnsiConsole.MarkupLine("[grey]Attempting to restart as Admin...[/]");
             Thread.Sleep(1500);
             RestartAsAdmin();
@@ -137,54 +331,59 @@ class Program
 
         LoadAllData();
         RebuildBlockedProcessNames();
-        EtwTracker = new EtwNetworkTracker();
-        
-        try {
-            EtwTracker.Start();
-        }
-        catch (Exception ex) {
+        _etwTracker = new EtwNetworkTracker();
+
+        try { _etwTracker.Start(); }
+        catch (Exception ex)
+        {
             AnsiConsole.WriteException(ex);
             AnsiConsole.MarkupLine("[red]Press any key to exit...[/]");
             Console.ReadKey();
             return;
         }
 
-        // Handle Ctrl+C
-        Console.CancelKeyPress += (s, e) => { e.Cancel = true; Running = false; };
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; _running = false; };
 
         DateTime lastRefresh = DateTime.MinValue;
 
-        while (Running)
+        while (_running)
         {
-            // Update UI every 2 seconds
-            if ((DateTime.Now - lastRefresh).TotalSeconds >= 2)
+            // Fix #4: 3-second refresh instead of 2-second
+            if ((DateTime.Now - lastRefresh).TotalSeconds >= RefreshIntervalSeconds)
             {
-                AutoEnforceBlockRules();
-                DrawScreen();
+                // Fix #5: Fetch connections ONCE, share between enforce + draw
+                _lastConnections = GetTcpConnections();
+                AutoEnforceBlockRules(_lastConnections);
+                DrawScreen(_lastConnections);
                 lastRefresh = DateTime.Now;
             }
 
-            // Non-blocking input check
             if (Console.KeyAvailable)
             {
                 var key = Console.ReadKey(true);
                 HandleKeyPress(key);
             }
 
-            Thread.Sleep(50); 
+            Thread.Sleep(50);
         }
 
-        EtwTracker.Dispose();
+        _etwTracker.Dispose();
         SaveAllData();
         AnsiConsole.MarkupLine("[yellow]Shutdown complete.[/]");
     }
 
-    static void DrawScreen()
+    #endregion
+
+    #region UIHelpers
+
+    static void DrawScreen(List<TcpConnectionInfo> connections)
     {
+        // Fix #14: Cursor-based redraw — position cursor at top without Console.Clear()
         Console.SetCursorPosition(0, 0);
+
         var table = new Table().Border(TableBorder.Rounded).Expand();
-        table.Title = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Press 'q' Quit | 'k' Kill | 'b' Block | 'i' Ignore | 'l' Lists[/]");
+        table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
+        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | L Lists | H Help[/]");
 
         table.AddColumn("#");
         table.AddColumn("Process");
@@ -196,26 +395,25 @@ class Program
         table.AddColumn(new TableColumn("Sent").RightAligned());
         table.AddColumn(new TableColumn("Recv").RightAligned());
 
-        var connections = GetTcpConnections();
-        
-        int maxRows = 20;
-        try 
-        { 
-            int overhead = ShowExtraLists ? 30 : 10; // Extra lists take ~20 lines, base UI takes ~10
-            maxRows = Math.Max(1, Console.WindowHeight - overhead); 
-        } 
-        catch { } // Fallback if WindowHeight is unavailable
+        int overhead = _showExtraLists ? 30 : 10;
+        int maxRows;
+        try   { maxRows = Math.Max(1, Console.WindowHeight - overhead); }
+        catch { maxRows = 20; }
 
-        for (int i = 0; i < Math.Min(connections.Count, maxRows); i++)
+        int displayCount = Math.Min(connections.Count, maxRows);
+        for (int i = 0; i < displayCount; i++)
         {
             var c = connections[i];
+            bool isBlocked = _blockedIPs.ContainsKey(c.RemoteIP) || _blockedProcessNames.Contains(c.ProcessName);
+            string ipColor = isBlocked ? "red" : "white";
+
             table.AddRow(
                 (i + 1).ToString(),
-                $"[bold white]{c.ProcessName}[/]",
+                $"[bold white]{Markup.Escape(c.ProcessName)}[/]",
                 $"[grey]{c.PID}[/]",
-                c.RemoteIP,
-                $"[magenta]{c.Geo}[/]",
-                $"[blue]{c.Domain}[/]",
+                $"[{ipColor}]{Markup.Escape(c.RemoteIP)}[/]",
+                $"[magenta]{Markup.Escape(c.Geo)}[/]",
+                $"[blue]{Markup.Escape(c.Domain)}[/]",
                 c.Duration,
                 $"[green]{c.TotalSent}[/]",
                 $"[yellow]{c.TotalReceived}[/]"
@@ -223,57 +421,70 @@ class Program
         }
 
         AnsiConsole.Write(table);
-        AnsiConsole.MarkupLine($"[grey]Total Connections: {connections.Count} | ETW Status: {(EtwTracker!.IsRunning ? "[green]Active[/]" : "[red]Stopped[/]")}[/]");
+        string etwStatus = _etwTracker!.IsRunning ? "[green]Active[/]" : "[red]Stopped[/]";
+        AnsiConsole.MarkupLine(
+            $"[grey]Connections: {connections.Count} | Blocked IPs: {_blockedIPs.Count} | ETW: {etwStatus}[/]");
         AnsiConsole.Write(new Rule());
 
-        // --- Alert Log ---
-        lock (AlertLock)
+        // Alert log
+        lock (_alertLock)
         {
-            if (AlertLog.Count > 0)
+            if (_alertLog.Count > 0)
             {
                 AnsiConsole.MarkupLine("[bold red on black] ⚠  AUTO-BLOCK ALERTS [/]");
-                foreach (var alert in AlertLog.TakeLast(5))
+                foreach (var alert in _alertLog.TakeLast(5))
                     AnsiConsole.MarkupLine(alert);
                 AnsiConsole.Write(new Rule());
             }
         }
-        
-        if (ShowExtraLists)
+
+        if (_showExtraLists)
         {
             var grid = new Grid();
-            grid.AddColumn();
-            grid.AddColumn();
-            grid.AddColumn();
-            
-            var bTable = new Table().Border(TableBorder.Rounded).AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain");
-            foreach (var kvp in BlockedIPs.OrderBy(x => x.Key)) bTable.AddRow(kvp.Key, $"[grey]{kvp.Value}[/]", $"[blue]{GetCachedDomain(kvp.Key)}[/]");
-            if (BlockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "");
+            grid.AddColumn(); grid.AddColumn(); grid.AddColumn();
+
+            var bTable = new Table().Border(TableBorder.Rounded)
+                .AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain");
+            foreach (var kvp in _blockedIPs.OrderBy(x => x.Key))
+                bTable.AddRow(kvp.Key, $"[grey]{Markup.Escape(kvp.Value)}[/]",
+                    $"[blue]{Markup.Escape(GetCachedDomain(kvp.Key))}[/]");
+            if (_blockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "");
 
             var iTable = new Table().Border(TableBorder.Rounded).AddColumn("[yellow]Ignored Procs[/]");
-            foreach (var proc in IgnoredProcesses.OrderBy(x => x)) iTable.AddRow(proc);
-            if (IgnoredProcesses.Count == 0) iTable.AddRow("[grey]None[/]");
+            foreach (var proc in _ignoredProcesses.OrderBy(x => x)) iTable.AddRow(Markup.Escape(proc));
+            if (_ignoredProcesses.Count == 0) iTable.AddRow("[grey]None[/]");
 
-            var dTable = new Table().Border(TableBorder.Rounded).AddColumn("[blue]Domain Cache (Last 15)[/]").AddColumn("Domain");
-            foreach (var kvp in DomainCache.OrderBy(x => x.Key).TakeLast(15)) dTable.AddRow(kvp.Key, kvp.Value);
-            if (DomainCache.Count == 0) dTable.AddRow("[grey]None[/]", "");
+            var dTable = new Table().Border(TableBorder.Rounded)
+                .AddColumn("[blue]Domain Cache (Last 15)[/]").AddColumn("Domain");
+            foreach (var kvp in _domainCache.OrderBy(x => x.Key).TakeLast(15))
+                dTable.AddRow(kvp.Key, Markup.Escape(kvp.Value));
+            if (_domainCache.Count == 0) dTable.AddRow("[grey]None[/]", "");
 
             grid.AddRow(bTable, iTable, dTable);
             AnsiConsole.Write(grid);
         }
-        
-        // Clear trailing lines to prevent ghosting when table shrinks
-        for (int i = 0; i < 5; i++) Console.WriteLine(new string(' ', Console.WindowWidth - 1 > 0 ? Console.WindowWidth - 1 : 0));
+
+        // Fix #14: Clear only the lines that may have "ghost" content if the table shrank
+        int currentRow = Console.CursorTop;
+        if (_prevRowCount > displayCount)
+        {
+            int linesToClear = Math.Min(_prevRowCount - displayCount + 2, Console.WindowHeight - currentRow - 1);
+            int width = Console.WindowWidth > 1 ? Console.WindowWidth - 1 : 0;
+            for (int i = 0; i < linesToClear; i++)
+                Console.WriteLine(new string(' ', width));
+        }
+        _prevRowCount = displayCount;
     }
 
     static void HandleKeyPress(ConsoleKeyInfo key)
     {
         switch (key.Key)
         {
-            case ConsoleKey.Q: Running = false; break;
+            case ConsoleKey.Q: _running = false; break;
             case ConsoleKey.K: Console.Clear(); KillProcessInteractive(); break;
             case ConsoleKey.I: Console.Clear(); IgnoreProcessInteractive(); break;
             case ConsoleKey.B: Console.Clear(); ManageBlockedIPsInteractive(); break;
-            case ConsoleKey.L: Console.Clear(); ShowExtraLists = !ShowExtraLists; break;
+            case ConsoleKey.L: Console.Clear(); _showExtraLists = !_showExtraLists; break;
             case ConsoleKey.H:
             case ConsoleKey.F1:
                 ShowHelp();
@@ -281,389 +492,479 @@ class Program
         }
     }
 
+    static void ShowHelp()
+    {
+        AnsiConsole.Clear();
+
+        string etwStatus  = _etwTracker?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]";
+        string blockedCnt = _blockedIPs.Count.ToString();
+        string ignoredCnt = _ignoredProcesses.Count.ToString();
+
+        var panel = new Panel(
+            $"[bold cyan]Keyboard Controls[/]\n" +
+            $"  [cyan]Q[/]       Quit the monitor\n" +
+            $"  [cyan]K[/]       Kill a process (interactive)\n" +
+            $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
+            $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
+            $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
+            $"  [cyan]H / F1[/]  Show this help screen\n\n" +
+            $"[bold cyan]Status[/]\n" +
+            $"  ETW Tracing : {etwStatus}\n" +
+            $"  Blocked IPs : [red]{blockedCnt}[/]\n" +
+            $"  Ignored     : [yellow]{ignoredCnt}[/]\n\n" +
+            $"[bold cyan]Firewall Rules[/]\n" +
+            $"  Rules are created natively via Windows Firewall COM API.\n" +
+            $"  Display name format: [grey]{FirewallRulePrefix}-<process>-<ip>[/]\n" +
+            $"  View in [italic]wf.msc → Outbound Rules[/].\n\n" +
+            $"[bold cyan]Files[/]\n" +
+            $"  [grey]{BlockedFile}[/]   — persisted block list (IP|process)\n" +
+            $"  [grey]{IgnoredFile}[/]  — ignored process names (one per line)\n" +
+            $"  [grey]{CrashLogFile}[/]  — error and exception log"
+        ).Header("[bold]TCP Monitor Help[/]").Expand();
+
+        AnsiConsole.Write(panel);
+        AnsiConsole.MarkupLine("\nPress any key to return...");
+        Console.ReadKey(true);
+        Console.Clear();
+    }
+
+    #endregion
+
+    #region ProcessControl
+
     static void KillProcessInteractive()
     {
         var conns = GetTcpConnections();
-        if (conns.Count == 0) return;
+        if (conns.Count == 0) { AnsiConsole.MarkupLine("[grey]No active connections.[/]"); Thread.Sleep(800); return; }
+
+        var choices = conns.Select(c => $"{c.PID}: {Markup.Escape(c.ProcessName)}").Distinct().ToList();
+        choices.Add("Cancel");
 
         var selected = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("Select process to [red]TERMINATE[/]:")
-                .AddChoices(conns.Select(c => $"{c.PID}: {c.ProcessName}").Distinct())
-                .AddChoices("Cancel"));
+                .AddChoices(choices));
 
         if (selected == "Cancel") return;
 
-        int pid = int.Parse(selected.Split(':')[0]);
-        try { Process.GetProcessById(pid).Kill(); } catch (Exception ex) { AnsiConsole.MarkupLine($"[red]{ex.Message}[/]"); Thread.Sleep(1000); }
+        if (int.TryParse(selected.Split(':')[0], out int pid))
+        {
+            try   { Process.GetProcessById(pid).Kill(); AnsiConsole.MarkupLine("[green]Process terminated.[/]"); }
+            catch (Exception ex) { AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]"); }
+            Thread.Sleep(1000);
+        }
     }
 
     static void IgnoreProcessInteractive()
     {
-        var conns = GetTcpConnections(includeIgnored: true);
-        var activeNames = conns.Select(c => c.ProcessName.ToLower()).Distinct().ToList();
-        var allNames = activeNames.Union(IgnoredProcesses).Distinct().ToList();
+        var conns    = GetTcpConnections(includeIgnored: true);
+        var active   = conns.Select(c => c.ProcessName.ToLower()).Distinct().ToList();
+        var allNames = active.Union(_ignoredProcesses).Distinct().OrderBy(x => x).ToList();
 
         if (allNames.Count == 0) return;
 
         var prompt = new MultiSelectionPrompt<string>()
-            .Title("Select processes to [red]IGNORE[/] (Space to toggle, Enter to save):")
-            .NotRequired()
-            .PageSize(15)
-            .AddChoices(allNames);
+            .Title("Select processes to [yellow]IGNORE[/] (Space=toggle, Enter=save):")
+            .NotRequired().PageSize(15).AddChoices(allNames);
 
-        foreach (var ignored in IgnoredProcesses)
-        {
-            if (allNames.Contains(ignored)) prompt.Select(ignored);
-        }
+        foreach (var p in _ignoredProcesses)
+            if (allNames.Contains(p)) prompt.Select(p);
 
         var selected = AnsiConsole.Prompt(prompt);
-        IgnoredProcesses = selected.Select(x => x.ToLower()).ToList();
-        SaveIgnoreList();
+        _ignoredProcesses = selected.Select(x => x.ToLower()).ToList();
+        SaveIgnoreList(); // Fix (ignored.txt): only write when user explicitly changes it
     }
 
     static void ManageBlockedIPsInteractive()
     {
-        var conns = GetTcpConnections();
-        var activeIPs = conns.GroupBy(c => c.RemoteIP).ToDictionary(g => g.Key, g => g.First().ProcessName);
-        var allIPs = activeIPs.Keys.Union(BlockedIPs.Keys).Distinct().ToList();
+        var conns     = GetTcpConnections();
+        var activeIPs = conns.GroupBy(c => c.RemoteIP)
+                             .ToDictionary(g => g.Key, g => g.First().ProcessName);
+        var allIPs    = activeIPs.Keys.Union(_blockedIPs.Keys).Distinct().OrderBy(x => x).ToList();
 
-        if (allIPs.Count == 0) return;
+        if (allIPs.Count == 0) { AnsiConsole.MarkupLine("[grey]No IPs available.[/]"); Thread.Sleep(800); return; }
 
-        var choices = allIPs.Select(ip => {
-            string proc = activeIPs.ContainsKey(ip) ? activeIPs[ip] : (BlockedIPs.ContainsKey(ip) ? BlockedIPs[ip] : "Unknown");
-            return $"{ip} ({proc})";
+        var choices = allIPs.Select(ip =>
+        {
+            string proc = activeIPs.TryGetValue(ip, out var ap) ? ap
+                        : (_blockedIPs.TryGetValue(ip, out var bp) ? bp : "Unknown");
+            return $"{ip} ({Markup.Escape(proc)})";
         }).ToList();
 
         var prompt = new MultiSelectionPrompt<string>()
-            .Title("Select IPs to [red]BLOCK[/] (Space to toggle, Enter to save):")
-            .NotRequired()
-            .PageSize(15)
-            .AddChoices(choices);
+            .Title("Select IPs to [red]BLOCK[/] (Space=toggle, Enter=save):")
+            .NotRequired().PageSize(15).AddChoices(choices);
 
-        foreach (var ip in BlockedIPs.Keys)
+        foreach (var ip in _blockedIPs.Keys)
         {
             var choice = choices.FirstOrDefault(c => c.StartsWith(ip + " "));
             if (choice != null) prompt.Select(choice);
         }
 
-        var selected = AnsiConsole.Prompt(prompt);
+        var selected    = AnsiConsole.Prompt(prompt);
         var selectedIPs = selected.Select(s => s.Split(' ')[0]).ToList();
-        
-        var newlyBlocked = selectedIPs.Except(BlockedIPs.Keys).ToList();
-        var newlyUnblocked = BlockedIPs.Keys.Except(selectedIPs).ToList();
+
+        // Fix #16: Validate IPs before accepting them
+        var invalidIPs = selectedIPs.Where(ip => !IsValidIP(ip)).ToList();
+        if (invalidIPs.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[red]Skipping invalid IPs: {string.Join(", ", invalidIPs)}[/]");
+            selectedIPs = selectedIPs.Except(invalidIPs).ToList();
+            Thread.Sleep(1200);
+        }
+
+        var newlyBlocked   = selectedIPs.Except(_blockedIPs.Keys).ToList();
+        var newlyUnblocked = _blockedIPs.Keys.Except(selectedIPs).ToList();
 
         var newDict = new Dictionary<string, string>();
-        foreach(var s in selected)
+        foreach (var s in selected)
         {
-            string ip = s.Split(' ')[0];
+            string ip   = s.Split(' ')[0];
+            if (!IsValidIP(ip)) continue;
             string proc = s.Substring(ip.Length + 2).TrimEnd(')');
             newDict[ip] = proc;
         }
 
-        BlockedIPs = newDict;
+        _blockedIPs = newDict;
         RebuildBlockedProcessNames();
         SaveBlockList();
 
+        // Fix #1/#6/#7: Use FirewallManager instead of powershell.exe
         foreach (var ip in newlyBlocked)
         {
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -Command \"New-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{BlockedIPs[ip]}-{ip}' -Direction Outbound -Action Block -RemoteAddress {ip}\"",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                })?.WaitForExit();
-            } catch { }
+            string proc = _blockedIPs.TryGetValue(ip, out var p) ? p : "Unknown";
+            bool added  = FirewallManager.AddBlockRule(ip, proc);
+            if (!added)
+                AnsiConsole.MarkupLine($"[yellow]Note: Firewall rule for {ip} may already exist or failed — check {CrashLogFile}[/]");
         }
 
         foreach (var ip in newlyUnblocked)
+            FirewallManager.RemoveBlockRule(ip);
+
+        AnsiConsole.MarkupLine($"[green]Saved. Blocked: {newlyBlocked.Count} added, {newlyUnblocked.Count} removed.[/]");
+        Thread.Sleep(1000);
+    }
+
+    /// <summary>
+    /// Fix #2: Corrected auto-kill logic (was inverted).
+    /// Fix #3: Deduplication via RuleExists before adding firewall rules.
+    /// Fix #1/#6/#7: Uses FirewallManager.AddBlockRule instead of powershell.exe.
+    /// Accepts a pre-fetched connection list to avoid a redundant TCP table scan (Fix #5).
+    /// </summary>
+    static void AutoEnforceBlockRules(List<TcpConnectionInfo> conns)
+    {
+        if (_blockedProcessNames.Count == 0 && _blockedIPs.Count == 0) return;
+
+        // ── Part 1: Kill any blocked process that is currently running ───────
+        try
         {
-            try
+            foreach (var p in Process.GetProcesses())
             {
-                Process.Start(new ProcessStartInfo
+                if (!_blockedProcessNames.Contains(p.ProcessName)) continue;
+
+                bool isNew; // Fix #2: Add() returns true when newly inserted
+                lock (_alertLock) { isNew = _autoKilledPids.Add(p.Id); }
+
+                if (isNew)
                 {
-                    FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -Command \"Remove-NetFirewallRule -DisplayName '*TCP-Monitor-Block*-{ip}'\"",
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                })?.WaitForExit();
-            } catch { }
+                    try
+                    {
+                        p.Kill();
+                        lock (_alertLock)
+                        {
+                            string t = DateTime.Now.ToString("HH:mm:ss");
+                            _alertLog.Add(
+                                $"[[{t}]] [red bold]AUTO-KILL:[/] [white]{Markup.Escape(p.ProcessName)}[/] " +
+                                $"(PID {p.Id}) terminated");
+                            if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+                        }
+                    }
+                    catch (Exception ex) { LogCrash($"AutoKill({p.Id}): {ex.Message}"); }
+                }
+            }
+        }
+        catch (Exception ex) { LogCrash($"AutoEnforceBlockRules (kill pass): {ex.Message}"); }
+
+        // ── Part 2: Catch new IPs from blocked processes and firewall them ───
+        foreach (var conn in conns)
+        {
+            if (!_blockedProcessNames.Contains(conn.ProcessName)) continue;
+            if (!IsValidIP(conn.RemoteIP)) continue; // Fix #16
+
+            bool isNewIp = !_blockedIPs.ContainsKey(conn.RemoteIP);
+            if (!isNewIp) continue;
+
+            _blockedIPs[conn.RemoteIP] = conn.ProcessName;
+            RebuildBlockedProcessNames();
+            SaveBlockList();
+
+            // Fix #1/#6/#7: native COM — no powershell.exe
+            bool added = FirewallManager.AddBlockRule(conn.RemoteIP, conn.ProcessName);
+
+            lock (_alertLock)
+            {
+                string t = DateTime.Now.ToString("HH:mm:ss");
+                string action = added ? "NEW IP BLOCKED" : "already blocked";
+                _alertLog.Add(
+                    $"[[{t}]] [red bold]AUTO-BLOCK:[/] [white]{Markup.Escape(conn.ProcessName)}[/] " +
+                    $"(PID {conn.PID}) → [yellow]{conn.RemoteIP}[/] ({action})");
+                if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+            }
         }
     }
+
+    #endregion
+
+    #region NetworkHelpers
 
     static List<TcpConnectionInfo> GetTcpConnections(bool includeIgnored = false)
     {
-        var list = new List<TcpConnectionInfo>();
+        var list       = new List<TcpConnectionInfo>();
         int bufferSize = 0;
         GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL);
-        IntPtr tcpTablePtr = Marshal.AllocHGlobal(bufferSize);
+        IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
 
         try
         {
-            if (GetExtendedTcpTable(tcpTablePtr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0) return list;
+            if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0)
+                return list;
 
-            int rowCount = Marshal.ReadInt32(tcpTablePtr);
-            IntPtr rowPtr = tcpTablePtr + 4;
+            int    rowCount = Marshal.ReadInt32(ptr);
+            IntPtr rowPtr   = ptr + 4;
 
             for (int i = 0; i < rowCount; i++)
             {
-                var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
-                rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+                try
+                {
+                    var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
+                    rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
 
-                if (row.dwState != 5) continue; // Established only
+                    if (row.dwState != TCP_STATE_ESTABLISHED) continue;
 
-                string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
-                if (remoteIP.StartsWith("127.") || remoteIP == "0.0.0.0") continue;
+                    string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
+                    if (remoteIP.StartsWith("127.") || remoteIP == "0.0.0.0") continue;
 
-                int pid = (int)row.dwOwningPid;
-                string pName = "Unknown";
-                try { 
-                    var p = Process.GetProcessById(pid);
-                    pName = p.ProcessName;
-                    if (!includeIgnored && IgnoredProcesses.Contains(pName.ToLower())) continue;
-                } catch { continue; }
+                    int    pid   = (int)row.dwOwningPid;
+                    string pName;
+                    try
+                    {
+                        pName = Process.GetProcessById(pid).ProcessName;
+                        if (!includeIgnored && _ignoredProcesses.Contains(pName.ToLower())) continue;
+                    }
+                    catch { continue; }
 
-                string key = $"{pid}-{remoteIP}";
-                if (!ConnectionStartTimes.ContainsKey(key)) ConnectionStartTimes[key] = DateTime.Now;
+                    string key = $"{pid}-{remoteIP}";
+                    if (!_connectionStartTimes.ContainsKey(key))
+                        _connectionStartTimes[key] = DateTime.Now;
 
-                var stats = EtwTracker?.GetStats(pid) ?? (0, 0);
+                    var stats = _etwTracker?.GetStats(pid) ?? (0, 0);
 
-                list.Add(new TcpConnectionInfo {
-                    ProcessName = pName,
-                    PID = pid,
-                    RemoteIP = remoteIP,
-                    Geo = GetCachedGeo(remoteIP),
-                    Domain = GetCachedDomain(remoteIP),
-                    Duration = (DateTime.Now - ConnectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
-                    TotalSent = FormatBytes(stats.Sent),
-                    TotalReceived = FormatBytes(stats.Received)
-                });
+                    list.Add(new TcpConnectionInfo
+                    {
+                        ProcessName   = pName,
+                        PID           = pid,
+                        RemoteIP      = remoteIP,
+                        Geo           = GetCachedGeo(remoteIP),
+                        Domain        = GetCachedDomain(remoteIP),
+                        Duration      = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
+                        TotalSent     = FormatBytes(stats.Sent),
+                        TotalReceived = FormatBytes(stats.Received)
+                    });
+                }
+                catch (Exception ex) { LogCrash($"GetTcpConnections row: {ex.Message}"); }
             }
         }
-        finally { Marshal.FreeHGlobal(tcpTablePtr); }
+        finally { Marshal.FreeHGlobal(ptr); }
+
         return list.OrderByDescending(x => x.ProcessName).ToList();
     }
 
-    // --- Helpers ---
     static string FormatBytes(long bytes)
     {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024)           return $"{bytes} B";
+        if (bytes < 1024 * 1024)   return $"{bytes / 1024.0:F1} KB";
         return $"{bytes / (1024.0 * 1024.0):F1} MB";
     }
 
     static string GetCachedDomain(string ip)
     {
-        if (DomainCache.TryGetValue(ip, out var domain)) return domain;
-        DomainCache[ip] = "...";
-        Task.Run(() => {
-            try {
-                var d = Dns.GetHostEntry(ip).HostName;
-                DomainCache[ip] = d;
-            } catch { DomainCache[ip] = "N/A"; }
+        if (_domainCache.TryGetValue(ip, out var domain)) return domain;
+        _domainCache[ip] = "...";
+        Task.Run(() =>
+        {
+            try   { _domainCache[ip] = Dns.GetHostEntry(ip).HostName; }
+            catch { _domainCache[ip] = "N/A"; }
         });
         return "...";
     }
 
     static string GetCachedGeo(string ip)
     {
-        if (GeoCache.TryGetValue(ip, out var geo)) return geo;
-        GeoCache[ip] = "...";
-        Task.Run(async () => {
-            GeoCache[ip] = await GeoIpLookupAsync(ip);
-        });
+        if (_geoCache.TryGetValue(ip, out var geo)) return geo;
+        _geoCache[ip] = "...";
+        Task.Run(async () => { _geoCache[ip] = await GeoIpLookupAsync(ip); });
         return "...";
     }
 
+    /// <summary>
+    /// Fix #8/#17: Uses SemaphoreSlim to serialize concurrent callers, plus
+    /// exponential back-off retry on non-success HTTP responses.
+    /// </summary>
     static async Task<string> GeoIpLookupAsync(string ip)
     {
-        var elapsed = DateTime.UtcNow - _lastGeoCall;
-        if (elapsed < GeoApiThrottle)
-        {
-            var wait = GeoApiThrottle - elapsed;
-            await Task.Delay(wait);
-        }
-        _lastGeoCall = DateTime.UtcNow;
-
+        await _geoSemaphore.WaitAsync();
         try
         {
-            string url = $"http://ip-api.com/json/{Uri.EscapeDataString(ip)}?fields=status,org,countryCode";
-            string json = await _http.GetStringAsync(url);
+            // Throttle: ensure at least GeoThrottleSeconds between calls
+            var wait = _geoApiThrottle - (DateTime.UtcNow - _lastGeoCall);
+            if (wait > TimeSpan.Zero) await Task.Delay(wait);
+            _lastGeoCall = DateTime.UtcNow;
 
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("status", out var status) || status.GetString() != "success")
-                return "N/A";
-
-            string org  = root.TryGetProperty("org",         out var o) ? o.GetString() ?? "" : "";
-            string code = root.TryGetProperty("countryCode", out var c) ? c.GetString() ?? "" : "";
-
-            if (org.Length > 3 && org[0] == 'A' && org[1] == 'S')
+            int delay = 500;
+            for (int attempt = 0; attempt < GeoMaxRetries; attempt++)
             {
-                int space = org.IndexOf(' ');
-                if (space > 0) org = org[(space + 1)..];
-            }
+                try
+                {
+                    string url  = $"{GeoApiBase}{Uri.EscapeDataString(ip)}?fields=status,org,countryCode";
+                    string json = await _http.GetStringAsync(url);
 
-            return string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
-        }
-        catch { return "N/A"; }
-    }
+                    using var doc  = JsonDocument.Parse(json);
+                    var root       = doc.RootElement;
 
-    static bool IsAdministrator() => new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                    if (!root.TryGetProperty("status", out var status) || status.GetString() != "success")
+                    {
+                        // Fix #17: back-off and retry on non-success
+                        await Task.Delay(delay);
+                        delay *= 2;
+                        continue;
+                    }
 
-    static void RestartAsAdmin() {
-        try { 
-            Process.Start(new ProcessStartInfo { 
-                FileName = Process.GetCurrentProcess().MainModule!.FileName, 
-                UseShellExecute = true, 
-                Verb = "runas",
-                WorkingDirectory = Environment.CurrentDirectory
-            }); 
-        } catch { }
-    }
+                    string org  = root.TryGetProperty("org",         out var o) ? o.GetString() ?? "" : "";
+                    string code = root.TryGetProperty("countryCode", out var c) ? c.GetString() ?? "" : "";
 
-    static void ShowHelp() {
-        AnsiConsole.Clear();
-        AnsiConsole.Write(new Panel("Keys:\n[cyan]Q[/] - Quit\n[cyan]K[/] - Kill Process\n[cyan]B[/] - Block IP\n[cyan]I[/] - Ignore Process").Header("Help"));
-        AnsiConsole.MarkupLine("\nPress any key to return...");
-        Console.ReadKey();
-    }
+                    if (org.Length > 3 && org[0] == 'A' && org[1] == 'S')
+                    {
+                        int space = org.IndexOf(' ');
+                        if (space > 0) org = org[(space + 1)..];
+                    }
 
-    static void LoadAllData() {
-        try {
-            if (File.Exists("ignored.txt")) {
-                IgnoredProcesses = File.ReadAllLines("ignored.txt")
-                                       .Where(x => !string.IsNullOrWhiteSpace(x))
-                                       .Select(x => x.Trim().ToLower())
-                                       .ToList();
-            }
-            if (File.Exists("blocked.txt")) {
-                foreach (var line in File.ReadAllLines("blocked.txt")) {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    var parts = line.Split('|');
-                    if (parts.Length == 2) BlockedIPs[parts[0].Trim()] = parts[1].Trim();
-                    else BlockedIPs[line.Trim()] = "Unknown";
+                    return string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
+                }
+                catch
+                {
+                    if (attempt == GeoMaxRetries - 1) return "N/A";
+                    await Task.Delay(delay);
+                    delay *= 2;
                 }
             }
-        } catch { }
+            return "N/A";
+        }
+        finally { _geoSemaphore.Release(); }
+    }
+
+    #endregion
+
+    #region DataPersistence
+
+    static void LoadAllData()
+    {
+        try
+        {
+            if (File.Exists(IgnoredFile))
+                _ignoredProcesses = File.ReadAllLines(IgnoredFile)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim().ToLower())
+                    .ToList();
+
+            if (File.Exists(BlockedFile))
+            {
+                foreach (var line in File.ReadAllLines(BlockedFile))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var parts = line.Split('|');
+                    string ip = parts[0].Trim();
+                    if (IsValidIP(ip)) // Fix #16: validate on load
+                        _blockedIPs[ip] = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                }
+            }
+        }
+        catch (Exception ex) { LogCrash($"LoadAllData: {ex.Message}"); }
     }
 
     static void RebuildBlockedProcessNames()
     {
-        BlockedProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var kvp in BlockedIPs)
+        _blockedProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in _blockedIPs)
         {
-            if (kvp.Value != "Unknown") {
-                BlockedProcessNames.Add(kvp.Value);
-            }
-            if (!IPAddress.TryParse(kvp.Key, out _)) {
-                // If the key is not an IP address, it's a process name
-                BlockedProcessNames.Add(kvp.Key);
-            }
+            if (kvp.Value != "Unknown")
+                _blockedProcessNames.Add(kvp.Value);
+            if (!IPAddress.TryParse(kvp.Key, out _))
+                _blockedProcessNames.Add(kvp.Key); // treat non-IP key as process name
         }
     }
 
-    /// <summary>
-    /// Scans all live TCP connections. If a connection's process name is in the
-    /// blocked list, it auto-adds a Windows Firewall outbound block rule for that
-    /// IP, kills the process, and appends an entry to the on-screen alert log.
-    /// </summary>
-    static void AutoEnforceBlockRules()
+    static void SaveAllData()
     {
-        if (BlockedProcessNames.Count == 0) return;
-
-        // 1. Proactively terminate any running process that is in the block list
-        try
-        {
-            foreach (var p in Process.GetProcesses())
-            {
-                if (BlockedProcessNames.Contains(p.ProcessName))
-                {
-                    bool killed = false;
-                    lock (AlertLock)
-                    {
-                        killed = !AutoKilledPids.Add(p.Id);
-                    }
-
-                    if (!killed)
-                    {
-                        try 
-                        { 
-                            p.Kill(); 
-                            lock (AlertLock)
-                            {
-                                string alertTime = DateTime.Now.ToString("HH:mm:ss");
-                                AlertLog.Add($"[[{alertTime}]] [red bold]AUTO-KILL:[/] [white]{p.ProcessName}[/] (PID {p.Id}) terminated proactively");
-                                if (AlertLog.Count > 50) AlertLog.RemoveAt(0);
-                            }
-                        } 
-                        catch { }
-                    }
-                }
-            }
-        }
-        catch { }
-
-        // 2. Scan live connections to catch new IPs and block them
-        var conns = GetTcpConnections(includeIgnored: true);
-
-        foreach (var conn in conns)
-        {
-            if (!BlockedProcessNames.Contains(conn.ProcessName)) continue;
-
-            string alertTime = DateTime.Now.ToString("HH:mm:ss");
-            bool newIp = !BlockedIPs.ContainsKey(conn.RemoteIP);
-
-            // Add to in-memory block list and persist
-            if (newIp)
-            {
-                BlockedIPs[conn.RemoteIP] = conn.ProcessName;
-                RebuildBlockedProcessNames();
-                SaveBlockList();
-
-                // Add Windows Firewall rule for new IP
-                try
-                {
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "powershell.exe",
-                        Arguments = $"-NoProfile -Command \"New-NetFirewallRule -DisplayName 'TCP-Monitor-Block-{conn.ProcessName}-{conn.RemoteIP}' -Direction Outbound -Action Block -RemoteAddress {conn.RemoteIP}\"",
-                        CreateNoWindow = true,
-                        UseShellExecute = false
-                    })?.WaitForExit();
-                }
-                catch { }
-
-                // Log alert
-                lock (AlertLock)
-                {
-                    AlertLog.Add($"[[{alertTime}]] [red bold]AUTO-BLOCK:[/] [white]{conn.ProcessName}[/] (PID {conn.PID}) tried to connect → [yellow]{conn.RemoteIP}[/] (NEW IP blocked)");
-                    if (AlertLog.Count > 50) AlertLog.RemoveAt(0); // Keep log bounded
-                }
-            }
-        }
-    }
-
-    static void SaveAllData() {
-        File.WriteAllLines("ignored.txt", IgnoredProcesses);
+        SaveIgnoreList();
         SaveBlockList();
     }
-    static void SaveIgnoreList() => File.WriteAllLines("ignored.txt", IgnoredProcesses);
-    static void SaveBlockList() => File.WriteAllLines("blocked.txt", BlockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value}"));
+
+    // Fix (ignored.txt): Only called explicitly when the user changes the list via 'I'
+    // or on shutdown — never in the main loop timer.
+    static void SaveIgnoreList()
+    {
+        try   { File.WriteAllLines(IgnoredFile, _ignoredProcesses); }
+        catch (Exception ex) { LogCrash($"SaveIgnoreList: {ex.Message}"); }
+    }
+
+    static void SaveBlockList()
+    {
+        try   { File.WriteAllLines(BlockedFile, _blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value}")); }
+        catch (Exception ex) { LogCrash($"SaveBlockList: {ex.Message}"); }
+    }
+
+    #endregion
+
+    #region Utilities
+
+    /// <summary>Fix #16: Validates that a string is a parseable IPv4/IPv6 address.</summary>
+    static bool IsValidIP(string ip) =>
+        !string.IsNullOrWhiteSpace(ip) && IPAddress.TryParse(ip, out _);
+
+    static void LogCrash(string message) =>
+        File.AppendAllText(CrashLogFile, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+
+    static bool IsAdministrator() =>
+        new System.Security.Principal.WindowsPrincipal(
+            System.Security.Principal.WindowsIdentity.GetCurrent())
+        .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+
+    static void RestartAsAdmin()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName        = Process.GetCurrentProcess().MainModule!.FileName,
+                UseShellExecute = true,
+                Verb            = "runas",
+                WorkingDirectory = Environment.CurrentDirectory
+            });
+        }
+        catch (Exception ex) { LogCrash($"RestartAsAdmin: {ex.Message}"); }
+    }
+
+    #endregion
 }
 
 class TcpConnectionInfo
 {
-    public string ProcessName { get; set; } = "";
-    public int PID { get; set; }
-    public string RemoteIP { get; set; } = "";
-    public string Geo { get; set; } = "";
-    public string Domain { get; set; } = "";
-    public string Duration { get; set; } = "";
-    public string TotalSent { get; set; } = "";
+    public string ProcessName   { get; set; } = "";
+    public int    PID           { get; set; }
+    public string RemoteIP      { get; set; } = "";
+    public string Geo           { get; set; } = "";
+    public string Domain        { get; set; } = "";
+    public string Duration      { get; set; } = "";
+    public string TotalSent     { get; set; } = "";
     public string TotalReceived { get; set; } = "";
 }
