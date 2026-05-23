@@ -1,4 +1,4 @@
-# 🛡️ Enterprise TCP Monitor (MyFirewall) v3.0
+# 🛡️ Enterprise TCP Monitor (MyFirewall) v5.0
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
