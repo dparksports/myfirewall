@@ -82,7 +82,7 @@ namespace MyFirewall.Desktop.ViewModels
         public string StatusMessage { get => _statusMessage; set => SetProperty(ref _statusMessage, value); }
 
         // Commands
-        public RelayCommand<string> BlockIPCommand { get; }
+        public RelayCommand<object> BlockIPCommand { get; }
         public RelayCommand<string> UnblockIPCommand { get; }
         public RelayCommand<string> IgnoreAppCommand { get; }
         public RelayCommand<string> UnignoreAppCommand { get; }
@@ -105,7 +105,7 @@ namespace MyFirewall.Desktop.ViewModels
             _networkMonitor = new NetworkMonitorService(logError, new GeoIpService());
 
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
-            BlockIPCommand = new RelayCommand<string>(ExecuteBlockIP);
+            BlockIPCommand = new RelayCommand<object>(ExecuteBlockIP);
             UnblockIPCommand = new RelayCommand<string>(ExecuteUnblockIP);
             IgnoreAppCommand = new RelayCommand<string>(ExecuteIgnoreApp);
             UnignoreAppCommand = new RelayCommand<string>(ExecuteUnignoreApp);
@@ -281,14 +281,31 @@ namespace MyFirewall.Desktop.ViewModels
         }
 
         /// <summary>
-        /// Fix: Block command now correctly receives "IP|AppName" from the XAML MultiBinding.
+        /// Fix: Block command now correctly receives ConnectionInfo or "IP|AppName" string.
         /// </summary>
-        private void ExecuteBlockIP(string? ipAndApp)
+        private void ExecuteBlockIP(object? parameter)
         {
-            if (string.IsNullOrWhiteSpace(ipAndApp)) return;
-            var parts = ipAndApp.Split('|');
-            string ip = parts[0].Trim();
-            string app = parts.Length > 1 ? parts[1].Trim() : "Unknown";
+            if (parameter == null) return;
+
+            string ip = "";
+            string app = "Unknown";
+
+            if (parameter is ConnectionInfo conn)
+            {
+                ip = conn.Destination;
+                app = conn.ApplicationName;
+            }
+            else if (parameter is string ipAndApp)
+            {
+                if (string.IsNullOrWhiteSpace(ipAndApp)) return;
+                var parts = ipAndApp.Split('|');
+                ip = parts[0].Trim();
+                app = parts.Length > 1 ? parts[1].Trim() : "Unknown";
+            }
+            else
+            {
+                return;
+            }
 
             if (!IPAddress.TryParse(ip, out _)) return;
 
