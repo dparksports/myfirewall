@@ -284,7 +284,7 @@ class Program
     static List<string>              _ignoredProcesses    = new();
     static Dictionary<string, string> _blockedIPs         = new();
     static HashSet<string>           _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
-    static Dictionary<string, string> _domainCache        = new();
+    static System.Collections.Concurrent.ConcurrentDictionary<string, string> _domainCache  = new();
     static Dictionary<string, DateTime> _connectionStartTimes = new();
     static EtwNetworkTracker?        _etwTracker;
     static volatile bool             _running             = true;
@@ -293,7 +293,7 @@ class Program
     static readonly SemaphoreSlim    _geoSemaphore        = new(1, 1); // Fix #8: serial throttle
     static DateTime                  _lastGeoCall         = DateTime.MinValue;
     static readonly TimeSpan         _geoApiThrottle      = TimeSpan.FromSeconds(GeoThrottleSeconds);
-    static Dictionary<string, string> _geoCache           = new();
+    static System.Collections.Concurrent.ConcurrentDictionary<string, string> _geoCache     = new();
     static readonly List<string>     _alertLog            = new();
     static readonly object           _alertLock           = new();
     static readonly HashSet<int>     _autoKilledPids      = new();
@@ -619,10 +619,21 @@ class Program
         var newDict = new Dictionary<string, string>();
         foreach (var s in selected)
         {
-            string ip   = s.Split(' ')[0];
-            if (!IsValidIP(ip)) continue;
-            string proc = s.Substring(ip.Length + 2).TrimEnd(')');
-            newDict[ip] = proc;
+            int openParen = s.IndexOf('(');
+            int closeParen = s.LastIndexOf(')');
+            if (openParen > 0 && closeParen > openParen)
+            {
+                string ip = s.Substring(0, openParen).Trim();
+                if (!IsValidIP(ip)) continue;
+                string proc = s.Substring(openParen + 1, closeParen - openParen - 1).Trim();
+                newDict[ip] = proc;
+            }
+            else
+            {
+                string ip = s.Split(' ')[0];
+                if (IsValidIP(ip))
+                    newDict[ip] = "Unknown";
+            }
         }
 
         _blockedIPs = newDict;

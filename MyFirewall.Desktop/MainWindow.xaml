@@ -201,6 +201,7 @@
                 <!-- DataGrid Card -->
                 <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,0">
                     <DataGrid ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection, Mode=OneWay}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
                               CanUserSortColumns="True" VirtualizingPanel.IsVirtualizing="True"
                               VirtualizingPanel.VirtualizationMode="Recycling">
                         <DataGrid.RowStyle>
@@ -234,7 +235,7 @@
                                             <!-- Fix: Pass both IP and AppName for proper blocking -->
                                             <MenuItem Header="🛑  Block this address"
                                                       Command="{Binding DataContext.BlockIPCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                      CommandParameter="{Binding Destination}"/>
+                                                      CommandParameter="{Binding}"/>
                                             <MenuItem Header="👁  Hide this app"
                                                       Command="{Binding DataContext.IgnoreAppCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                       CommandParameter="{Binding ApplicationName}"/>
