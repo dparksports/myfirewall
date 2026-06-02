@@ -41,6 +41,7 @@ namespace MyFirewall.Desktop.Services
             }
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoOptimization | System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         public bool AddBlockRule(string ip, string processName)
         {
             if (string.IsNullOrWhiteSpace(ip)) return false;
@@ -54,18 +55,22 @@ namespace MyFirewall.Desktop.Services
                     if (policy is null) { _logError("FirewallService: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    var rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    
+                    // Fix for AccessViolationException: Use dynamic to force IDispatch/late-binding.
+                    // .NET 8 has a known regression where vtable-based COM marshalling for INetFwRule.Protocol
+                    // can cause memory corruption/AccessViolationException after sustained use.
+                    dynamic rule = Activator.CreateInstance(ruleType)!;
 
                     rule.Name = $"{FirewallRulePrefix}-{processName}-{ip}";
                     rule.Description = $"Auto-blocked by TCP Monitor | application={processName}";
                     rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     rule.RemoteAddresses = ip;
-                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled = true;
                     rule.Profiles = 7; // All profiles (Domain | Private | Public)
 
-                    policy.Rules.Add(rule);
+                    policy.Rules.Add((INetFwRule)rule);
                     return true;
                 }
                 catch (Exception ex)
