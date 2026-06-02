@@ -1,124 +1,57 @@
-# 🛡️ Enterprise TCP Monitor (MyFirewall) v5.0
+# 🛡️ MyFirewall: Advanced TCP Monitor & Native Firewall
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://dotnet.microsoft.com/)
-[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Framework](https://img.shields.io/badge/.NET-8.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
-[![License](https://img.shields.io/badge/license-Apache%202.0-yellow.svg)](LICENSE)
+**MyFirewall** is a high-performance network security suite for Windows that combines real-time ETW (Event Tracing for Windows) network monitoring with native kernel-level traffic blocking. It provides both a modern WPF Desktop experience and a lightweight, high-speed CLI for power users.
 
-**Enterprise TCP Monitor** is an ultra-high performance, dual-interface network security and active host defense system built in C# for enterprise Windows environments. It intercepts outbound traffic at the kernel level using **Event Tracing for Windows (ETW)**, resolves geolocations and domain names asynchronously, and dynamically enforces active-blocking defense policies in under 1 millisecond using **direct in-process Windows Firewall COM API (HNetCfg)** interop.
+![MyFirewall Infographic](assets/infographic.png)
 
-The suite features both a responsive console dashboard for servers and a premium, GPU-accelerated WPF Desktop application for workstations.
+## 🚀 Key Features
 
----
+-   **Real-Time Monitoring:** Leverages ETW (Event Tracing for Windows) for zero-overhead, kernel-level capture of all established TCP connections.
+-   **Native Firewall Integration:** Unlike many software firewalls that run in user-space, MyFirewall communicates directly with the **Windows Filtering Platform (WFP)** via the native `HNetCfg.FwPolicy2` COM API.
+-   **Smart Blocking:** Instantly block suspicious remote IPs or entire application process trees.
+-   **Automatic Enforce:** Detects and blocks new connection attempts from previously flagged malicious processes.
+-   **Zero-Flicker UI:** Smart-diffing algorithm in the Desktop app ensures smooth, real-time updates without the "refresh flicker" common in network monitors.
+-   **Geographical Insights:** Integrated Geo-IP lookup and reverse DNS to identify where your data is going.
+-   **Low Resource Footprint:** Minimal CPU and RAM usage, designed for 24/7 background operation.
 
-## 🚀 Enterprise Architectural Design
+## 🛠 Architecture
 
-1. **Direct In-Process Firewall Control (Sub-Millisecond Execution)**: 
-   Replaces slow, heavy `powershell.exe` command spawns which flood Windows Event Log (Event ID 4104). By communicating directly with the `HNetCfg.FwPolicy2` COM object, firewall rule creation and removal happen instantaneously with zero CPU overhead.
-   
-2. **Kernel-Level ETW Network Sniffing**: 
-   Taps directly into kernel socket providers (`TcpIpSend`/`TcpIpRecv`) to measure upload and download throughput per process ID in real-time, bypassing user-mode API limitations.
-   
-3. **Autopilot Defense & Threat Termination**: 
-   Monitors connection behaviors and automatically terminates blacklisted process IDs while dynamically adding firewall rules to block new remote destination IPs contacted by those threats.
-   
-4. **Smart-Diff Zero-Flicker Grid**: 
-   The WPF Desktop application utilizes an efficient in-memory hash diffing mechanism to update the UI connections grid. It preserves selections, scrolling, and column sorting, eliminating grid flicker entirely.
-   
-5. **Throttled GeoIP Queue & Resilient Backoff**: 
-   Protects upstream rate limits with a serialized queue wrapper and exponential backoff retry mechanism.
-   
-6. **Graceful UAC Elevation Fallback**: 
-   The console application elevates automatically, while the desktop app performs a silent elevation request on launch. If the user declines admin privilege, the desktop app falls back to a clean, read-only "No Admin" mode, informing the user instead of crashing or exiting.
+MyFirewall is built with a focus on performance and system integrity:
 
----
+-   **Kernel Tracing:** Uses `Microsoft.Diagnostics.Tracing.TraceEvent` to tap into the Windows Kernel network stack.
+-   **Native Interop:** Direct COM Interop for Windows Firewall management, avoiding the overhead of `powershell.exe` or `netsh`.
+-   **Process Tree Termination:** Robust process handling that cleans up entire process trees to prevent "zombie" network connections.
+-   **Safe Elevation:** Built-in UAC auto-redirection to ensure the monitor has the necessary privileges to access kernel events and modify firewall policies.
 
-## 📊 System Architecture & Process Flow
+## 📥 Installation & Verification
 
-```mermaid
-graph TD
-    A[Windows Kernel Stack] -->|ETW Socket Events| B[EtwNetworkTracker]
-    C[iphlpapi.dll GetExtendedTcpTable] -->|TCP Table Snapshots| D[Data Aggregation & Diff Engine]
-    B -->|Bytes Sent / Received| D
-    D -->|1. Live Updates| F[UI Dashboards: Console / WPF Desktop]
-    D -->|2. Enforce Security Policy| E[Defense Coordinator]
-    E -->|Threat Neutralization| G[Process.Kill]
-    E -->|Instant Host Block| H[Native COM Firewall API]
+Download the latest release for your preferred environment. For security, always verify the checksums before execution.
+
+| Asset | Platform | SHA256 Checksum |
+| :--- | :--- | :--- |
+| `release_cli_win_x64.zip` | Windows x64 (CLI) | `05E855F4D58D8D82AA31FCCC9E9E9A988987ED474156C154A01F9D518BCB8FF0` |
+| `release_desktop_win_x64.zip` | Windows x64 (WPF) | `FA6CAE735F170EA4A654DCAAE5665C0A9EB7F8717C8B0C0C2F29C1C21C3209ED` |
+
+### Manual Verification
+```powershell
+Get-FileHash MyFirewall.exe -Algorithm SHA256
 ```
 
----
+## 📖 Usage
 
-## 🎨 System Infographics
+### Desktop App
+1.  Launch `MyFirewall.Desktop.exe`.
+2.  Review the live connection grid.
+3.  **Right-click** any connection to block the IP, hide the application, or terminate the process tree.
+4.  Monitor traffic stats and active firewall rules in the dashboard.
 
-![Enterprise TCP Monitor Infographic](assets/infographic.png)
+### CLI App
+-   `Q`: Quit
+-   `K`: Kill a process (interactive)
+-   `B`: Block/Unblock IPs (interactive)
+-   `I`: Manage ignored applications
+-   `L`: Toggle detailed lists
+-   `H`: Show help
 
----
-
-## ✨ Features & Capabilities
-
-- 🛸 **GPU-Accelerated Desktop UI**: Dark theme utilizing glassmorphism styles, glowing status badges, active alert feeds, and responsive user interaction.
-- ⚡ **Spectre.Console CLI**: Low-overhead terminal dashboard for server deployments with keyboard hotkeys.
-- 🌍 **GeoIP & ISP Lookup**: Flags remote IP geolocations, organizations, and domain names instantly.
-- ⚙️ **Manual Overrides**: Persisted configurations are safely updated and maintained without dynamic overwrites.
-- 📁 **Centralized Diagnostics**: Complete logging of system events and exceptions in `crash.log`.
-
----
-
-## ⌨️ Hotkeys & Control Map
-
-| Key (Console) | WPF Action | Description |
-|:---:|:---|:---|
-| **`Q`** | **Close Window** | Gracefully shuts down active ETW kernel sessions, flushes buffers, and exits. |
-| **`K`** | **Stop Process** | Terminate any active process selected from the list. |
-| **`B`** | **Block IP** | Manually add/remove firewall outbound block rules for IPs. |
-| **`I`** | **Hide App** | Ignore specific process names to clean up live dashboards. |
-| **`L`** | **Toggle Lists** | Expand sidebar lists displaying all blocked IPs, hidden apps, and domain cache. |
-| **`H / F1`** | **Help screen** | Displays active configuration directories, ETW states, and quick help. |
-
----
-
-## 🛠️ Build & Run Instructions
-
-- **OS**: Windows 10 / 11 or Windows Server (required for ETW and COM Firewall).
-- **Framework**: .NET 8.0 SDK or later.
-
-### Building from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/dparksports/myfirewall.git
-cd myfirewall
-
-# Build the solution in Release configuration
-dotnet build --configuration Release
-```
-
-### Running the CLI Console Edition
-Run PowerShell or Cmd as **Administrator**:
-```bash
-dotnet run --project MyFirewall.csproj
-```
-
-### Running the Desktop GUI Edition
-Double-click the executable or run via CLI. It will prompt for UAC elevation automatically:
-```bash
-dotnet run --project MyFirewall.Desktop/MyFirewall.Desktop.csproj
-```
-
----
-
-## 📂 Configuration Storage
-
-Files are stored in the application directory:
-- **`blocked.txt`**: Active block rules (format: `IP|ProcessName`).
-- **`ignored.txt`**: Hushed processes (one per line).
-- **`crash.log`**: Diagnostics, exceptions, and event summaries.
-
----
-
-## 🛡️ License
-
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
-
-***
-made with a heart in california
+## 📄 License
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
