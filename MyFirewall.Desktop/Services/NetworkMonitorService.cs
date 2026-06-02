@@ -188,7 +188,7 @@ namespace MyFirewall.Desktop.Services
             return list;
         }
 
-        public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, string> blockedIPs, HashSet<string> blockedProcessNames, HashSet<int> autoKilledPids)
+        public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, string> blockedIPs, HashSet<string> blockedProcessNames)
         {
             var alerts = new List<AlertEntry>();
             if (blockedProcessNames.Count == 0 && blockedIPs.Count == 0) return alerts;
@@ -215,25 +215,6 @@ namespace MyFirewall.Desktop.Services
             }
 
             return alerts;
-        }
-
-        /// <summary>
-        /// Prune autoKilledPids to remove entries for PIDs that no longer exist.
-        /// Prevents unbounded growth of the set.
-        /// </summary>
-        public static void PruneStaleKilledPids(HashSet<int> autoKilledPids)
-        {
-            if (autoKilledPids.Count < 50) return; // Only prune when it gets large
-
-            var activePids = new HashSet<int>();
-            try
-            {
-                foreach (var p in Process.GetProcesses())
-                    activePids.Add(p.Id);
-            }
-            catch { return; }
-
-            autoKilledPids.RemoveWhere(pid => !activePids.Contains(pid));
         }
 
         public void Dispose()

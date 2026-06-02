@@ -27,7 +27,6 @@ namespace MyFirewall.Desktop.ViewModels
         private Dictionary<string, string> _blockedIPsDict = new();
         private HashSet<string> _ignoredAppsSet = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
-        private HashSet<int> _autoKilledPids = new();
 
         // Smart-diff: keyed by ConnectionKey for in-place updates
         private readonly Dictionary<string, ConnectionInfo> _connectionMap = new();
@@ -227,7 +226,7 @@ namespace MyFirewall.Desktop.ViewModels
                 ).ToList();
             }
 
-            var alerts = _networkMonitor.AutoEnforce(newConns, _firewallService, _blockedIPsDict, _blockedProcessNames, _autoKilledPids);
+            var alerts = _networkMonitor.AutoEnforce(newConns, _firewallService, _blockedIPsDict, _blockedProcessNames);
 
             bool saveNeeded = false;
             foreach (var alert in alerts)
@@ -245,14 +244,6 @@ namespace MyFirewall.Desktop.ViewModels
             // Smart-diff update: only add/remove/update changed connections (eliminates flicker)
             SmartUpdateConnections(newConns);
             ConnectionCount = Connections.Count;
-
-            // Prune stale auto-killed PIDs every ~30 seconds (10 ticks at 3s interval)
-            _pruneCounter++;
-            if (_pruneCounter >= 10)
-            {
-                _pruneCounter = 0;
-                NetworkMonitorService.PruneStaleKilledPids(_autoKilledPids);
-            }
         }
 
         /// <summary>

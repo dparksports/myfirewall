@@ -18,10 +18,10 @@ namespace MyFirewall.Desktop.Services
             _logError = logError;
         }
 
-        private INetFwPolicy2? GetPolicy()
+        private dynamic? GetPolicy()
         {
             var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", throwOnError: false);
-            return type is null ? null : (INetFwPolicy2?)Activator.CreateInstance(type);
+            return type is null ? null : Activator.CreateInstance(type);
         }
 
         public bool RuleExists(string ip)
@@ -30,35 +30,42 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    var policy = GetPolicy();
+                    dynamic? policy = GetPolicy();
                     if (policy is null) return false;
-                    foreach (INetFwRule r in policy.Rules)
-                        if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
-                            return true;
+                    
+                    // Use dynamic to avoid vtable-based COM marshalling which causes memory corruption
+                    foreach (dynamic r in (dynamic)policy.Rules)
+                    {
+                        try
+                        {
+                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
+                                return true;
+                        }
+                        catch { /* skip rules we can't read */ }
+                    }
                 }
                 catch (Exception ex) { _logError($"FirewallService.RuleExists: {ex.Message}"); }
                 return false;
             }
         }
 
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoOptimization | System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         public bool AddBlockRule(string ip, string processName)
         {
             if (string.IsNullOrWhiteSpace(ip)) return false;
-            if (RuleExists(ip)) return false;
+            if (RuleExists(ip)) return true;
 
             lock (_fwLock)
             {
                 try
                 {
-                    var policy = GetPolicy();
+                    dynamic? policy = GetPolicy();
                     if (policy is null) { _logError("FirewallService: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
                     
-                    // Fix for AccessViolationException: Use dynamic to force IDispatch/late-binding.
-                    // .NET 8 has a known regression where vtable-based COM marshalling for INetFwRule.Protocol
-                    // can cause memory corruption/AccessViolationException after sustained use.
+                    // Fix for AccessViolationException/E_INVALIDARG: Use dynamic for EVERYTHING.
+                    // .NET 8 has a regression where vtable-based COM marshalling for INetFwRule
+                    // causes memory corruption and E_INVALIDARG when adding rules.
                     dynamic rule = Activator.CreateInstance(ruleType)!;
 
                     rule.Name = $"{FirewallRulePrefix}-{processName}-{ip}";
@@ -68,14 +75,14 @@ namespace MyFirewall.Desktop.Services
                     rule.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
                     rule.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled = true;
-                    rule.Profiles = 7; // All profiles (Domain | Private | Public)
+                    rule.Profiles = 7; // All profiles
 
-                    policy.Rules.Add((INetFwRule)rule);
+                    ((dynamic)policy.Rules).Add(rule); // No cast to INetFwRule
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    _logError($"FirewallService.AddBlockRule({ip}): {ex}");
+                    _logError($"FirewallService.AddBlockRule({ip}): {ex.Message}");
                     return false;
                 }
             }
@@ -87,18 +94,24 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    var policy = GetPolicy();
+                    dynamic? policy = GetPolicy();
                     if (policy is null) return;
 
                     var toRemove = new List<string>();
-                    foreach (INetFwRule r in policy.Rules)
-                        if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
-                            toRemove.Add(r.Name);
+                    foreach (dynamic r in (dynamic)policy.Rules)
+                    {
+                        try
+                        {
+                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
+                                toRemove.Add((string)r.Name);
+                        }
+                        catch { }
+                    }
 
                     foreach (var name in toRemove)
-                        policy.Rules.Remove(name);
+                        ((dynamic)policy.Rules).Remove(name);
                 }
-                catch (Exception ex) { _logError($"FirewallService.RemoveBlockRule({ip}): {ex}"); }
+                catch (Exception ex) { _logError($"FirewallService.RemoveBlockRule({ip}): {ex.Message}"); }
             }
         }
 
@@ -111,11 +124,17 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    var policy = GetPolicy();
+                    dynamic? policy = GetPolicy();
                     if (policy is null) return 0;
                     int count = 0;
-                    foreach (INetFwRule r in policy.Rules)
-                        if (r.Name.StartsWith(FirewallRulePrefix)) count++;
+                    foreach (dynamic r in (dynamic)policy.Rules)
+                    {
+                        try
+                        {
+                            if (((string)r.Name).StartsWith(FirewallRulePrefix)) count++;
+                        }
+                        catch { }
+                    }
                     return count;
                 }
                 catch (Exception ex)
@@ -136,12 +155,16 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    var policy = GetPolicy();
+                    dynamic? policy = GetPolicy();
                     if (policy is null) return rules;
-                    foreach (INetFwRule r in policy.Rules)
+                    foreach (dynamic r in (dynamic)policy.Rules)
                     {
-                        if (r.Name.StartsWith(FirewallRulePrefix))
-                            rules.Add((r.Name, r.RemoteAddresses ?? "", r.Enabled));
+                        try
+                        {
+                            if (((string)r.Name).StartsWith(FirewallRulePrefix))
+                                rules.Add(((string)r.Name, (string)r.RemoteAddresses ?? "", (bool)r.Enabled));
+                        }
+                        catch { }
                     }
                 }
                 catch (Exception ex) { _logError($"FirewallService.GetAllRules: {ex.Message}"); }
