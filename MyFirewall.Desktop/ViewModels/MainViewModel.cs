@@ -58,6 +58,19 @@ namespace MyFirewall.Desktop.ViewModels
         private string _lastRefreshTime = "--:--:--";
         public string LastRefreshTime { get => _lastRefreshTime; set => SetProperty(ref _lastRefreshTime, value); }
 
+        private int _refreshInterval = 2;
+        public int RefreshInterval
+        {
+            get => _refreshInterval;
+            set
+            {
+                if (SetProperty(ref _refreshInterval, value) && value > 0)
+                {
+                    _timer.Interval = TimeSpan.FromSeconds(value);
+                }
+            }
+        }
+
         private int _firewallRuleCount;
         public int FirewallRuleCount { get => _firewallRuleCount; set => SetProperty(ref _firewallRuleCount, value); }
 
@@ -130,7 +143,7 @@ namespace MyFirewall.Desktop.ViewModels
                 AddAlert($"Failed to start network monitor: {ex.Message}", AlertSeverity.Critical);
             }
 
-            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_refreshInterval) };
             _timer.Tick += Timer_Tick;
             _timer.Start();
         }
@@ -158,9 +171,13 @@ namespace MyFirewall.Desktop.ViewModels
         private void RebuildBlockedProcessNames()
         {
             _blockedProcessNames.Clear();
+            // Note: We no longer auto-populate process names from _blockedIPs to avoid
+            // aggressive kill-loops for shared components like WebView2.
+            // Process name blocking is now an explicit, separate action if added in the future.
             foreach (var kvp in _blockedIPsDict)
             {
-                if (kvp.Value != "Unknown") _blockedProcessNames.Add(kvp.Value);
+                if (!IPAddress.TryParse(kvp.Key, out _))
+                    _blockedProcessNames.Add(kvp.Key); // treat non-IP key as process name
             }
         }
 
@@ -311,11 +328,17 @@ namespace MyFirewall.Desktop.ViewModels
 
             if (!_blockedIPsDict.ContainsKey(ip))
             {
-                _blockedIPsDict[ip] = app;
-                _firewallService.AddBlockRule(ip, app);
-                _dataService.SaveBlocked(_blockedIPsDict);
-                SyncObservables();
-                AddAlert($"Blocked {ip} ({app})", AlertSeverity.Warning);
+                if (_firewallService.AddBlockRule(ip, app))
+                {
+                    _blockedIPsDict[ip] = app;
+                    _dataService.SaveBlocked(_blockedIPsDict);
+                    SyncObservables();
+                    AddAlert($"Blocked {ip} ({app})", AlertSeverity.Warning);
+                }
+                else
+                {
+                    AddAlert($"Failed to block {ip}. Ensure app is running as Administrator.", AlertSeverity.Critical);
+                }
             }
         }
 
@@ -377,8 +400,12 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 var process = Process.GetProcessById(pid);
                 string name = process.ProcessName;
-                process.Kill();
-                AddAlert($"Stopped {name} (PID {pid})", AlertSeverity.Warning);
+                process.Kill(entireProcessTree: true); // Kill tree for more effective termination
+                AddAlert($"Stopped {name} and its children (PID {pid})", AlertSeverity.Warning);
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 5) // Access Denied
+            {
+                AddAlert($"Access denied to stop PID {pid}. System or protected process?", AlertSeverity.Critical);
             }
             catch (Exception ex)
             {

@@ -3,6 +3,25 @@ using System.Runtime.InteropServices;
 
 namespace MyFirewall.Desktop.Services
 {
+    public enum NET_FW_IP_PROTOCOL
+    {
+        NET_FW_IP_PROTOCOL_TCP = 6,
+        NET_FW_IP_PROTOCOL_UDP = 17,
+        NET_FW_IP_PROTOCOL_ANY = 256
+    }
+
+    public enum NET_FW_RULE_DIRECTION
+    {
+        NET_FW_RULE_DIR_IN = 1,
+        NET_FW_RULE_DIR_OUT = 2
+    }
+
+    public enum NET_FW_ACTION
+    {
+        NET_FW_ACTION_BLOCK = 0,
+        NET_FW_ACTION_ALLOW = 1
+    }
+
     [ComImport, Guid("98325047-C671-4174-8D81-DEFCD3F03186"), CoClass(typeof(NetFwPolicy2Class))]
     interface INetFwPolicy2
     {
@@ -17,8 +36,8 @@ namespace MyFirewall.Desktop.Services
         [DispId(9)] void EnableRuleGroup(int profileTypesBitmask, string group, bool enable);
         [DispId(10)] bool IsRuleGroupEnabled(int profileTypesBitmask, string group);
         [DispId(11)] void RestoreLocalFirewallDefaults();
-        [DispId(12)] object DefaultInboundAction { [param: In] set; get; }
-        [DispId(13)] object DefaultOutboundAction { [param: In] set; get; }
+        [DispId(12)] NET_FW_ACTION DefaultInboundAction { [param: In] set; get; }
+        [DispId(13)] NET_FW_ACTION DefaultOutboundAction { [param: In] set; get; }
         [DispId(14)] bool IsRuleGroupCurrentlyEnabled(string group);
         [DispId(15)] object LocalPolicyModifyState { get; }
     }
@@ -48,16 +67,17 @@ namespace MyFirewall.Desktop.Services
         [DispId(8)] string LocalAddresses { [param: In] set; get; }
         [DispId(9)] string RemoteAddresses { [param: In] set; get; }
         [DispId(10)] string IcmpTypesAndCodes { [param: In] set; get; }
-        [DispId(11)] object Direction { [param: In] set; get; }
+        [DispId(11)] NET_FW_RULE_DIRECTION Direction { [param: In] set; get; }
         [DispId(12)] object Interfaces { [param: In] set; get; }
         [DispId(13)] string InterfaceTypes { [param: In] set; get; }
         [DispId(14)] bool Enabled { [param: In] set; get; }
         [DispId(15)] string Grouping { [param: In] set; get; }
         [DispId(16)] int Profiles { [param: In] set; get; }
         [DispId(17)] bool EdgeTraversal { [param: In] set; get; }
-        [DispId(18)] object Action { [param: In] set; get; }
+        [DispId(18)] NET_FW_ACTION Action { [param: In] set; get; }
     }
 
     [ComImport, Guid("2C5BC43E-3369-4C33-AB0C-BE9469677AF4")]
     class NetFwRuleClass { }
 }
+

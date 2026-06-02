@@ -193,29 +193,8 @@ namespace MyFirewall.Desktop.Services
             var alerts = new List<AlertEntry>();
             if (blockedProcessNames.Count == 0 && blockedIPs.Count == 0) return alerts;
 
-            try
-            {
-                foreach (var p in Process.GetProcesses())
-                {
-                    if (!blockedProcessNames.Contains(p.ProcessName)) continue;
-                    bool isNew = autoKilledPids.Add(p.Id);
-                    if (isNew)
-                    {
-                        try
-                        {
-                            p.Kill();
-                            alerts.Add(new AlertEntry
-                            {
-                                Message = $"Stopped {p.ProcessName} (PID {p.Id}) automatically",
-                                Severity = AlertSeverity.Critical
-                            });
-                        }
-                        catch (Exception ex) { _logError($"AutoKill({p.Id}): {ex.Message}"); }
-                    }
-                }
-            }
-            catch (Exception ex) { _logError($"AutoEnforce (kill pass): {ex.Message}"); }
-
+            // We no longer auto-kill processes by name here to prevent system instability.
+            // If a process is in blockedProcessNames, we only block its new IPs.
             foreach (var conn in conns)
             {
                 if (!blockedProcessNames.Contains(conn.ApplicationName)) continue;
@@ -224,14 +203,15 @@ namespace MyFirewall.Desktop.Services
                 bool isNewIp = !blockedIPs.ContainsKey(conn.Destination);
                 if (!isNewIp) continue;
 
-                blockedIPs[conn.Destination] = conn.ApplicationName;
-                bool added = fwService.AddBlockRule(conn.Destination, conn.ApplicationName);
-
-                alerts.Add(new AlertEntry
+                if (fwService.AddBlockRule(conn.Destination, conn.ApplicationName))
                 {
-                    Message = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
-                    Severity = AlertSeverity.Warning
-                });
+                    blockedIPs[conn.Destination] = conn.ApplicationName;
+                    alerts.Add(new AlertEntry
+                    {
+                        Message = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
+                        Severity = AlertSeverity.Warning
+                    });
+                }
             }
 
             return alerts;

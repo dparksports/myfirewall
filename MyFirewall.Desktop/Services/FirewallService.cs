@@ -58,12 +58,12 @@ namespace MyFirewall.Desktop.Services
 
                     rule.Name = $"{FirewallRulePrefix}-{processName}-{ip}";
                     rule.Description = $"Auto-blocked by TCP Monitor | application={processName}";
-                    rule.Protocol = NET_FW_IP_PROTOCOL_ANY;
+                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     rule.RemoteAddresses = ip;
-                    rule.Direction = NET_FW_RULE_DIR_OUT;
-                    rule.Action = NET_FW_ACTION_BLOCK;
+                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled = true;
-                    rule.Profiles = 0x7FFFFFFF;
+                    rule.Profiles = 7; // All profiles (Domain | Private | Public)
 
                     policy.Rules.Add(rule);
                     return true;

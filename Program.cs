@@ -17,6 +17,10 @@ using System.Threading.Tasks;
 // ─────────────────────────────────────────────────────────────────────────────
 //  Windows Firewall COM interop types  (replaces powershell.exe spawning)
 // ─────────────────────────────────────────────────────────────────────────────
+public enum NET_FW_IP_PROTOCOL { NET_FW_IP_PROTOCOL_TCP = 6, NET_FW_IP_PROTOCOL_UDP = 17, NET_FW_IP_PROTOCOL_ANY = 256 }
+public enum NET_FW_RULE_DIRECTION { NET_FW_RULE_DIR_IN = 1, NET_FW_RULE_DIR_OUT = 2 }
+public enum NET_FW_ACTION { NET_FW_ACTION_BLOCK = 0, NET_FW_ACTION_ALLOW = 1 }
+
 [ComImport, Guid("98325047-C671-4174-8D81-DEFCD3F03186"), CoClass(typeof(NetFwPolicy2Class)), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
 interface INetFwPolicy2
 {
@@ -31,8 +35,8 @@ interface INetFwPolicy2
     [DispId(9)]  void EnableRuleGroup(int profileTypesBitmask, string group, bool enable);
     [DispId(10)] bool IsRuleGroupEnabled(int profileTypesBitmask, string group);
     [DispId(11)] void RestoreLocalFirewallDefaults();
-    [DispId(12)] object DefaultInboundAction  { get; set; }
-    [DispId(13)] object DefaultOutboundAction { get; set; }
+    [DispId(12)] NET_FW_ACTION DefaultInboundAction  { get; set; }
+    [DispId(13)] NET_FW_ACTION DefaultOutboundAction { get; set; }
     [DispId(14)] bool IsRuleGroupCurrentlyEnabled(string group);
     [DispId(15)] object LocalPolicyModifyState { get; }
 }
@@ -62,14 +66,14 @@ interface INetFwRule
     [DispId(8)]  string LocalAddresses  { get; set; }
     [DispId(9)]  string RemoteAddresses { get; set; }
     [DispId(10)] string IcmpTypesAndCodes { get; set; }
-    [DispId(11)] object Direction     { get; set; }
+    [DispId(11)] NET_FW_RULE_DIRECTION Direction { get; set; }
     [DispId(12)] object Interfaces    { get; set; }
     [DispId(13)] string InterfaceTypes { get; set; }
     [DispId(14)] bool   Enabled       { get; set; }
     [DispId(15)] string Grouping      { get; set; }
     [DispId(16)] int    Profiles      { get; set; }
     [DispId(17)] bool   EdgeTraversal { get; set; }
-    [DispId(18)] object Action        { get; set; }
+    [DispId(18)] NET_FW_ACTION Action { get; set; }
 }
 
 [ComImport, Guid("2C5BC43E-3369-4C33-AB0C-BE9469677AF4")]
@@ -82,7 +86,7 @@ class Program
 {
     #region Constants
 
-    private const int    RefreshIntervalSeconds  = 3;
+    private static int    RefreshIntervalSeconds  = 2;
     private const int    MaxAlertLogEntries       = 50;
     private const string FirewallRulePrefix       = "TCP-Monitor-Block";
     private const string BlockedFile              = "blocked.txt";
@@ -177,12 +181,12 @@ class Program
 
                     rule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
                     rule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
-                    rule.Protocol        = NET_FW_IP_PROTOCOL_ANY;
+                    rule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     rule.RemoteAddresses = ip;
-                    rule.Direction       = NET_FW_RULE_DIR_OUT;
-                    rule.Action          = NET_FW_ACTION_BLOCK;
+                    rule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled         = true;
-                    rule.Profiles        = 0x7FFFFFFF; // All profiles
+                    rule.Profiles        = 7; // All profiles (Domain | Private | Public)
 
                     policy.Rules.Add(rule);
                     return true;
@@ -306,9 +310,19 @@ class Program
 
     #region Entry Point
 
-    static void Main()
+    static void Main(string[] args)
     {
         Console.Title = "TCP Monitor v5.0";
+
+        // Parse arguments
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--refresh" && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out int r) && r > 0)
+                    RefreshIntervalSeconds = r;
+            }
+        }
 
         // Fix #11/#12: Global error handling + cleanup on any exit path
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -549,7 +563,16 @@ class Program
 
         if (int.TryParse(selected.Split(':')[0], out int pid))
         {
-            try   { Process.GetProcessById(pid).Kill(); AnsiConsole.MarkupLine("[green]Process terminated.[/]"); }
+            try
+            {
+                var process = Process.GetProcessById(pid);
+                process.Kill(entireProcessTree: true);
+                AnsiConsole.MarkupLine("[green]Process (and tree) terminated.[/]");
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 5)
+            {
+                AnsiConsole.MarkupLine("[red]Access Denied. System or protected process?[/]");
+            }
             catch (Exception ex) { AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]"); }
             Thread.Sleep(1000);
         }
@@ -666,60 +689,32 @@ class Program
     {
         if (_blockedProcessNames.Count == 0 && _blockedIPs.Count == 0) return;
 
-        // ── Part 1: Kill any blocked process that is currently running ───────
-        try
-        {
-            foreach (var p in Process.GetProcesses())
-            {
-                if (!_blockedProcessNames.Contains(p.ProcessName)) continue;
-
-                bool isNew; // Fix #2: Add() returns true when newly inserted
-                lock (_alertLock) { isNew = _autoKilledPids.Add(p.Id); }
-
-                if (isNew)
-                {
-                    try
-                    {
-                        p.Kill();
-                        lock (_alertLock)
-                        {
-                            string t = DateTime.Now.ToString("HH:mm:ss");
-                            _alertLog.Add(
-                                $"[[{t}]] [red bold]AUTO-KILL:[/] [white]{Markup.Escape(p.ProcessName)}[/] " +
-                                $"(PID {p.Id}) terminated");
-                            if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
-                        }
-                    }
-                    catch (Exception ex) { LogCrash($"AutoKill({p.Id}): {ex.Message}"); }
-                }
-            }
-        }
-        catch (Exception ex) { LogCrash($"AutoEnforceBlockRules (kill pass): {ex.Message}"); }
-
-        // ── Part 2: Catch new IPs from blocked processes and firewall them ───
+        // ── Part 1: Catch new IPs from blocked processes and firewall them ───
         foreach (var conn in conns)
         {
+            // We no longer auto-kill processes by name here to prevent system instability.
+            // If a process is in _blockedProcessNames, we only block its new IPs.
             if (!_blockedProcessNames.Contains(conn.ProcessName)) continue;
             if (!IsValidIP(conn.RemoteIP)) continue; // Fix #16
 
             bool isNewIp = !_blockedIPs.ContainsKey(conn.RemoteIP);
             if (!isNewIp) continue;
 
-            _blockedIPs[conn.RemoteIP] = conn.ProcessName;
-            RebuildBlockedProcessNames();
-            SaveBlockList();
-
             // Fix #1/#6/#7: native COM — no powershell.exe
-            bool added = FirewallManager.AddBlockRule(conn.RemoteIP, conn.ProcessName);
-
-            lock (_alertLock)
+            if (FirewallManager.AddBlockRule(conn.RemoteIP, conn.ProcessName))
             {
-                string t = DateTime.Now.ToString("HH:mm:ss");
-                string action = added ? "NEW IP BLOCKED" : "already blocked";
-                _alertLog.Add(
-                    $"[[{t}]] [red bold]AUTO-BLOCK:[/] [white]{Markup.Escape(conn.ProcessName)}[/] " +
-                    $"(PID {conn.PID}) → [yellow]{conn.RemoteIP}[/] ({action})");
-                if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+                _blockedIPs[conn.RemoteIP] = conn.ProcessName;
+                RebuildBlockedProcessNames();
+                SaveBlockList();
+
+                lock (_alertLock)
+                {
+                    string t = DateTime.Now.ToString("HH:mm:ss");
+                    _alertLog.Add(
+                        $"[[{t}]] [red bold]AUTO-BLOCK:[/] [white]{Markup.Escape(conn.ProcessName)}[/] " +
+                        $"(PID {conn.PID}) → [yellow]{conn.RemoteIP}[/] (NEW IP BLOCKED)");
+                    if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+                }
             }
         }
     }
@@ -905,10 +900,11 @@ class Program
     static void RebuildBlockedProcessNames()
     {
         _blockedProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Note: We no longer auto-populate process names from _blockedIPs to avoid
+        // aggressive kill-loops for shared components like WebView2.
+        // Process name blocking is now an explicit, separate action if added in the future.
         foreach (var kvp in _blockedIPs)
         {
-            if (kvp.Value != "Unknown")
-                _blockedProcessNames.Add(kvp.Value);
             if (!IPAddress.TryParse(kvp.Key, out _))
                 _blockedProcessNames.Add(kvp.Key); // treat non-IP key as process name
         }
