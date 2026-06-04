@@ -156,6 +156,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- Search Field -->
@@ -180,8 +181,15 @@
                         </TextBlock>
                     </Grid>
 
+                    <!-- Strategy Selector -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,20,0">
+                        <TextBlock Text="🎯 Threat Intel Strategy:" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,0,8,0"/>
+                        <RadioButton Content="Connection-Driven" IsChecked="{Binding IsConnectionDriven}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="11" Cursor="Hand"/>
+                        <RadioButton Content="Proactive ETW (WebView2)" IsChecked="{Binding IsProcessStartEtw}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" FontSize="11" Cursor="Hand"/>
+                    </StackPanel>
+
                     <!-- Action Buttons -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
                         <Button Content="⟳ Refresh" Command="{Binding RefreshCommand}" Style="{StaticResource GhostButton}" Margin="0,0,4,0"/>
                         <Button Content="📋 Export" Command="{Binding ExportLogCommand}" Style="{StaticResource GhostButton}"/>
                     </StackPanel>

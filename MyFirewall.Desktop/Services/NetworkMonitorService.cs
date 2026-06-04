@@ -12,6 +12,12 @@ using MyFirewall.Desktop.Models;
 
 namespace MyFirewall.Desktop.Services
 {
+    public enum ProcessMonitoringStrategy
+    {
+        ConnectionDriven,
+        ProcessStartEtw
+    }
+
     public class NetworkMonitorService : IDisposable
     {
         private static readonly string SessionName = KernelTraceEventParser.KernelSessionName;
@@ -26,6 +32,23 @@ namespace MyFirewall.Desktop.Services
 
         private readonly Dictionary<string, DateTime> _connectionStartTimes = new();
         public bool IsRunning { get; private set; }
+
+        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ConnectionDriven;
+        public ProcessMonitoringStrategy MonitoringStrategy => _monitoringStrategy;
+        public Action<AlertEntry>? OnProactiveAlert { get; set; }
+        private readonly HashSet<int> _proactiveEvaluatedPids = new();
+
+        public void SetMonitoringStrategy(ProcessMonitoringStrategy strategy)
+        {
+            if (_monitoringStrategy == strategy) return;
+            _monitoringStrategy = strategy;
+
+            if (IsRunning)
+            {
+                Stop();
+                Start();
+            }
+        }
 
         public NetworkMonitorService(Action<string> logError, GeoIpService geoIpService)
         {
@@ -43,8 +66,19 @@ namespace MyFirewall.Desktop.Services
                 }
                 Thread.Sleep(500);
 
+                lock (_lock)
+                {
+                    _proactiveEvaluatedPids.Clear();
+                }
+
                 _session = new TraceEventSession(SessionName) { StopOnDispose = true };
-                _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+                
+                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP;
+                if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
+                {
+                    keywords |= KernelTraceEventParser.Keywords.Process;
+                }
+                _session.EnableKernelProvider(keywords);
 
                 _session.Source.Kernel.TcpIpSend += data =>
                 {
@@ -53,6 +87,18 @@ namespace MyFirewall.Desktop.Services
                 _session.Source.Kernel.TcpIpRecv += data =>
                 {
                     lock (_lock) _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
+                };
+
+                _session.Source.Kernel.ProcessStart += data =>
+                {
+                    if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw && data.ProcessID > 0)
+                    {
+                        string imageName = data.ImageFileName;
+                        if (imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Task.Run(() => HandleWebView2Spawned(data.ProcessID));
+                        }
+                    }
                 };
 
                 Task.Run(() =>
@@ -69,7 +115,40 @@ namespace MyFirewall.Desktop.Services
             }
         }
 
-        public void Stop() => Dispose();
+        private void HandleWebView2Spawned(int pid)
+        {
+            lock (_lock)
+            {
+                if (_proactiveEvaluatedPids.Contains(pid)) return;
+                _proactiveEvaluatedPids.Add(pid);
+            }
+
+            try
+            {
+                var meta = _metadataService.GetMetadataForPid(pid);
+                var isSigned = meta.Signature.Contains("Signed");
+                var severity = isSigned ? AlertSeverity.Info : AlertSeverity.Critical;
+
+                var alert = new AlertEntry
+                {
+                    Message = $"[Proactive WebView2 Spawned] PID {pid} by {meta.ParentProcessName}. Digital Signature: {meta.Signature}",
+                    Severity = severity,
+                    Timestamp = DateTime.Now.ToString("HH:mm:ss")
+                };
+
+                OnProactiveAlert?.Invoke(alert);
+            }
+            catch (Exception ex)
+            {
+                _logError($"Proactive evaluation error for PID {pid}: {ex.Message}");
+            }
+        }
+
+        public void Stop()
+        {
+            _session?.Dispose();
+            _session = null;
+        }
 
         /// <summary>
         /// Returns aggregate (TotalSent, TotalReceived) across all tracked PIDs.
@@ -227,7 +306,7 @@ namespace MyFirewall.Desktop.Services
         {
             if (_disposed) return;
             _disposed = true;
-            _session?.Dispose();
+            Stop();
             GC.SuppressFinalize(this);
         }
     }

@@ -54,6 +54,36 @@ namespace MyFirewall.Desktop.ViewModels
 
         public bool HasSelectedConnection => SelectedConnection != null;
 
+        public bool IsConnectionDriven
+        {
+            get => _networkMonitor.MonitoringStrategy == ProcessMonitoringStrategy.ConnectionDriven;
+            set
+            {
+                if (value)
+                {
+                    _networkMonitor.SetMonitoringStrategy(ProcessMonitoringStrategy.ConnectionDriven);
+                    OnPropertyChanged(nameof(IsConnectionDriven));
+                    OnPropertyChanged(nameof(IsProcessStartEtw));
+                    AddAlert("Switched process monitoring to: Connection-Driven", AlertSeverity.Info);
+                }
+            }
+        }
+
+        public bool IsProcessStartEtw
+        {
+            get => _networkMonitor.MonitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw;
+            set
+            {
+                if (value)
+                {
+                    _networkMonitor.SetMonitoringStrategy(ProcessMonitoringStrategy.ProcessStartEtw);
+                    OnPropertyChanged(nameof(IsConnectionDriven));
+                    OnPropertyChanged(nameof(IsProcessStartEtw));
+                    AddAlert("Switched process monitoring to: ETW Process Start", AlertSeverity.Info);
+                }
+            }
+        }
+
         private int _connectionCount;
         public int ConnectionCount { get => _connectionCount; set => SetProperty(ref _connectionCount, value); }
 
@@ -131,6 +161,14 @@ namespace MyFirewall.Desktop.ViewModels
             _dataService = new DataService(logError);
             _firewallService = new FirewallService(logError);
             _networkMonitor = new NetworkMonitorService(logError, new GeoIpService());
+
+            _networkMonitor.OnProactiveAlert = alert =>
+            {
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                {
+                    AddAlertEntry(alert);
+                }));
+            };
 
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
             BlockIPCommand = new RelayCommand<object>(ExecuteBlockIP);
