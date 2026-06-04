@@ -19,6 +19,12 @@ namespace MyFirewall.Desktop.Models
         public bool IsBlocked { get; set; }
         public string CountryCode { get; set; } = "";
 
+        // New process metadata fields
+        public string ParentProcessName { get; set; } = "Unknown";
+        public string ExecutablePath { get; set; } = "N/A";
+        public string Signature { get; set; } = "Unsigned / Unknown";
+        public string LastModified { get; set; } = "N/A";
+
         public string Upload => FormatBytes(UploadBytes);
         public string Download => FormatBytes(DownloadBytes);
 

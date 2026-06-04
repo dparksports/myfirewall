@@ -21,6 +21,7 @@ namespace MyFirewall.Desktop.Services
         private readonly object _lock = new();
         private readonly Action<string> _logError;
         private readonly GeoIpService _geoIpService;
+        private readonly ProcessMetadataService _metadataService = new();
         private bool _disposed;
 
         private readonly Dictionary<string, DateTime> _connectionStartTimes = new();
@@ -163,6 +164,7 @@ namespace MyFirewall.Desktop.Services
 
                         // Get geo info with country code
                         var geoResult = _geoIpService.GetCachedGeoWithCode(remoteIP);
+                        var meta = _metadataService.GetMetadataForPid(pid);
 
                         list.Add(new ConnectionInfo
                         {
@@ -177,7 +179,11 @@ namespace MyFirewall.Desktop.Services
                             Duration = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
                             UploadBytes = sent,
                             DownloadBytes = recv,
-                            IsBlocked = isBlocked
+                            IsBlocked = isBlocked,
+                            ParentProcessName = meta.ParentProcessName,
+                            ExecutablePath = meta.ExecutablePath,
+                            Signature = meta.Signature,
+                            LastModified = meta.LastModified
                         });
                     }
                     catch (Exception ex) { _logError($"GetTcpConnections row: {ex.Message}"); }

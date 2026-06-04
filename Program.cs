@@ -126,6 +126,37 @@ class Program
         public uint dwOwningPid;
     }
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(IntPtr hProcess, int dwFlags, [Out] System.Text.StringBuilder lpExeName, ref int lpdwSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_BASIC_INFORMATION
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId; // Parent PID
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        ref PROCESS_BASIC_INFORMATION processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    private const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const int PROCESS_QUERY_INFORMATION = 0x0400;
+
     #endregion
 
     #region FirewallManager — Native COM (no powershell.exe)
@@ -414,7 +445,7 @@ class Program
 
         var table = new Table().Border(TableBorder.Rounded).Expand();
         table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | L Lists | H Help[/]");
+        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | L Lists | H Help[/]");
 
         table.AddColumn("#");
         table.AddColumn("Process");
@@ -515,6 +546,7 @@ class Program
             case ConsoleKey.K: Console.Clear(); KillProcessInteractive(); break;
             case ConsoleKey.I: Console.Clear(); IgnoreProcessInteractive(); break;
             case ConsoleKey.B: Console.Clear(); ManageBlockedIPsInteractive(); break;
+            case ConsoleKey.P: Console.Clear(); ShowProcessDetailsInteractive(); break;
             case ConsoleKey.L: Console.Clear(); _showExtraLists = !_showExtraLists; break;
             case ConsoleKey.H:
             case ConsoleKey.F1:
@@ -537,6 +569,7 @@ class Program
             $"  [cyan]K[/]       Kill a process (interactive)\n" +
             $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
             $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
+            $"  [cyan]P[/]       Process Intelligence / Details (interactive)\n" +
             $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
             $"  [cyan]H / F1[/]  Show this help screen\n\n" +
             $"[bold cyan]Status[/]\n" +
@@ -562,6 +595,147 @@ class Program
     #endregion
 
     #region ProcessControl
+
+    static void ShowProcessDetailsInteractive()
+    {
+        var conns = GetTcpConnections();
+        if (conns.Count == 0) { AnsiConsole.MarkupLine("[grey]No active connections.[/]"); Thread.Sleep(800); return; }
+
+        var choices = conns.Select(c => $"{c.PID}: {Markup.Escape(c.ProcessName)}").Distinct().ToList();
+        choices.Add("Cancel");
+
+        var selected = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select a process to view its [cyan]THREAT INTELLIGENCE[/]:")
+                .AddChoices(choices));
+
+        if (selected == "Cancel") return;
+
+        if (int.TryParse(selected.Split(':')[0], out int pid))
+        {
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[cyan]Resolving Threat Intelligence for PID {pid}...[/]");
+
+            string parentProcessName = "Unknown";
+            string executablePath = "N/A";
+            string signature = "Unsigned / Unknown";
+            string lastModified = "N/A";
+
+            IntPtr hProcess = IntPtr.Zero;
+            try
+            {
+                hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid);
+                if (hProcess == IntPtr.Zero)
+                {
+                    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                }
+
+                if (hProcess != IntPtr.Zero)
+                {
+                    // 1. Path
+                    var sb = new System.Text.StringBuilder(1024);
+                    int size = sb.Capacity;
+                    if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                    {
+                        executablePath = sb.ToString();
+                    }
+
+                    // 2. Parent PID & Name
+                    var pbi = new PROCESS_BASIC_INFORMATION();
+                    int status = NtQueryInformationProcess(hProcess, 0, ref pbi, Marshal.SizeOf(pbi), out _);
+                    if (status == 0)
+                    {
+                        int parentPid = pbi.InheritedFromUniqueProcessId.ToInt32();
+                        if (parentPid > 0)
+                        {
+                            try
+                            {
+                                using var parent = Process.GetProcessById(parentPid);
+                                parentProcessName = $"{parent.ProcessName} (PID {parentPid})";
+                            }
+                            catch
+                            {
+                                parentProcessName = $"PID {parentPid} (Exited)";
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                try
+                {
+                    using var process = Process.GetProcessById(pid);
+                    executablePath = process.MainModule?.FileName ?? "N/A";
+                }
+                catch { }
+            }
+            finally
+            {
+                if (hProcess != IntPtr.Zero)
+                {
+                    CloseHandle(hProcess);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
+            {
+                try
+                {
+                    var fileInfo = new FileInfo(executablePath);
+                    lastModified = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss");
+
+                    using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(executablePath))
+                    {
+                        using (var cert2 = new System.Security.Cryptography.X509Certificates.X509Certificate2(cert))
+                        {
+                            string subject = cert2.Subject;
+                            if (subject.Contains("CN="))
+                            {
+                                int start = subject.IndexOf("CN=") + 3;
+                                int end = subject.IndexOf(',', start);
+                                if (end > start)
+                                {
+                                    signature = "Signed by: " + subject.Substring(start, end - start);
+                                }
+                                else
+                                {
+                                    signature = "Signed by: " + subject.Substring(start);
+                                }
+                            }
+                            else
+                            {
+                                signature = "Signed: " + cert2.Subject;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    signature = "Unsigned";
+                }
+            }
+
+            var panel = new Panel(
+                $"[bold cyan]APPLICATION[/]\n" +
+                $"  Name: {Markup.Escape(selected.Split(':')[1].Trim())}\n" +
+                $"  PID : {pid}\n\n" +
+                $"[bold cyan]PARENT PROCESS[/]\n" +
+                $"  {Markup.Escape(parentProcessName)}\n\n" +
+                $"[bold cyan]DIGITAL SIGNATURE[/]\n" +
+                $"  {Markup.Escape(signature)}\n\n" +
+                $"[bold cyan]LOCATION (EXECUTABLE PATH)[/]\n" +
+                $"  {Markup.Escape(executablePath)}\n\n" +
+                $"[bold cyan]LAST MODIFIED[/]\n" +
+                $"  {lastModified}"
+            ).Header($"[bold]Threat Intelligence Report (PID {pid})[/]").Expand();
+
+            AnsiConsole.Write(panel);
+            AnsiConsole.MarkupLine("\nPress any key to return...");
+            Console.ReadKey(true);
+            Console.Clear();
+        }
+    }
 
     static void KillProcessInteractive()
     {

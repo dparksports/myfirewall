@@ -196,11 +196,12 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="3*"/>
                     <ColumnDefinition Width="280"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- DataGrid Card -->
                 <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,0">
-                    <DataGrid ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection, Mode=OneWay}"
+                    <DataGrid ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection, Mode=TwoWay}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               CanUserSortColumns="True" VirtualizingPanel.IsVirtualizing="True"
                               VirtualizingPanel.VirtualizationMode="Recycling">
@@ -470,6 +471,116 @@
                         </Grid>
                     </Border>
                 </Grid>
+
+                <!-- ═══════════════════════════════════════════════
+                     SELECTED CONNECTION DETAILS DRAWER
+                     ═══════════════════════════════════════════════ -->
+                <Border Grid.Column="2" Width="300" Margin="6,0,0,0">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource CardStyle}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasSelectedConnection}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Header with close button -->
+                        <Grid Grid.Row="0" Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" Grid.Column="0">
+                                <TextBlock Text="🛡" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Process Intelligence" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource AccentCyan}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="✕" Width="20" Height="20" Style="{StaticResource GhostButton}" FontSize="10" Command="{Binding DeselectConnectionCommand}" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <!-- Application Name -->
+                                <StackPanel Margin="0,0,0,12">
+                                    <TextBlock Text="APPLICATION" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                    <TextBlock Text="{Binding SelectedConnection.ApplicationName}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"/>
+                                    <TextBlock Text="{Binding SelectedConnection.PID, StringFormat='PID: {0}'}" FontSize="11" Foreground="{DynamicResource TextMuted}"/>
+                                </StackPanel>
+
+                                <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
+
+                                <!-- Parent Process -->
+                                <StackPanel Margin="0,8,0,12">
+                                    <TextBlock Text="PARENT PROCESS" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                    <TextBlock Text="{Binding SelectedConnection.ParentProcessName}" FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
+
+                                <!-- Digital Signature -->
+                                <StackPanel Margin="0,8,0,12">
+                                    <TextBlock Text="DIGITAL SIGNATURE" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                    <TextBlock Text="{Binding SelectedConnection.Signature}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                <Setter Property="Foreground" Value="{StaticResource StatusAmber}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedConnection.Signature}" Value="Unsigned">
+                                                        <Setter Property="Foreground" Value="{StaticResource StatusRed}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding SelectedConnection.Signature}" Value="Unsigned / Unknown">
+                                                        <Setter Property="Foreground" Value="{StaticResource StatusRed}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
+
+                                <!-- Location -->
+                                <StackPanel Margin="0,8,0,12">
+                                    <TextBlock Text="LOCATION (EXECUTABLE PATH)" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                    <TextBox Text="{Binding SelectedConnection.ExecutablePath, Mode=OneWay}" Foreground="{DynamicResource TextSecondary}" FontSize="11" Background="Transparent" BorderThickness="0" IsReadOnly="True" TextWrapping="Wrap" Padding="0"/>
+                                </StackPanel>
+
+                                <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
+
+                                <!-- Last Modified -->
+                                <StackPanel Margin="0,8,0,12">
+                                    <TextBlock Text="LAST MODIFIED DATE" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                    <TextBlock Text="{Binding SelectedConnection.LastModified}" FontSize="12" Foreground="{DynamicResource TextSecondary}"/>
+                                </StackPanel>
+
+                                <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
+
+                                <!-- Traffic Info -->
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="UPLOAD" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                        <TextBlock Text="{Binding SelectedConnection.Upload}" FontSize="13" FontWeight="Bold" Foreground="{StaticResource StatusGreen}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="DOWNLOAD" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
+                                        <TextBlock Text="{Binding SelectedConnection.Download}" FontSize="13" FontWeight="Bold" Foreground="{StaticResource StatusAmber}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
             </Grid>
 
 

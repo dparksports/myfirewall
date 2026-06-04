@@ -39,6 +39,21 @@ namespace MyFirewall.Desktop.ViewModels
         private bool _isMonitorActive;
         public bool IsMonitorActive { get => _isMonitorActive; set => SetProperty(ref _isMonitorActive, value); }
 
+        private ConnectionInfo? _selectedConnection;
+        public ConnectionInfo? SelectedConnection
+        {
+            get => _selectedConnection;
+            set
+            {
+                if (SetProperty(ref _selectedConnection, value))
+                {
+                    OnPropertyChanged(nameof(HasSelectedConnection));
+                }
+            }
+        }
+
+        public bool HasSelectedConnection => SelectedConnection != null;
+
         private int _connectionCount;
         public int ConnectionCount { get => _connectionCount; set => SetProperty(ref _connectionCount, value); }
 
@@ -102,6 +117,7 @@ namespace MyFirewall.Desktop.ViewModels
         public RelayCommand ClearAlertsCommand { get; }
         public RelayCommand RefreshCommand { get; }
         public RelayCommand ExportLogCommand { get; }
+        public RelayCommand DeselectConnectionCommand { get; }
 
         public MainViewModel()
         {
@@ -125,6 +141,7 @@ namespace MyFirewall.Desktop.ViewModels
             ClearAlertsCommand = new RelayCommand(_ => Alerts.Clear());
             RefreshCommand = new RelayCommand(_ => Timer_Tick(null, EventArgs.Empty));
             ExportLogCommand = new RelayCommand(_ => ExecuteExportLog());
+            DeselectConnectionCommand = new RelayCommand(_ => SelectedConnection = null);
 
             // Check admin status
             IsAdmin = CheckIsAdmin();
@@ -266,6 +283,13 @@ namespace MyFirewall.Desktop.ViewModels
                     {
                         Connections[idx] = conn;
                         _connectionMap[conn.ConnectionKey] = conn;
+
+                        // If this was the selected connection, update the selection reference to the new instance
+                        // so the details panel updates in real-time with the latest bytes and durations.
+                        if (SelectedConnection != null && SelectedConnection.ConnectionKey == conn.ConnectionKey)
+                        {
+                            SelectedConnection = conn;
+                        }
                     }
                 }
                 else
@@ -284,6 +308,11 @@ namespace MyFirewall.Desktop.ViewModels
                 {
                     Connections.Remove(stale);
                     _connectionMap.Remove(key);
+
+                    if (SelectedConnection != null && SelectedConnection.ConnectionKey == key)
+                    {
+                        SelectedConnection = null;
+                    }
                 }
             }
         }
