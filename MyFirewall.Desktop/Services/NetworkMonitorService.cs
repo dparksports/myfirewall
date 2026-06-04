@@ -190,7 +190,7 @@ namespace MyFirewall.Desktop.Services
             return IPAddress.NetworkToHostOrder((short)(rawPort & 0xFFFF)) & 0xFFFF;
         }
 
-        public List<ConnectionInfo> GetConnections(HashSet<string> ignoredApps, Dictionary<string, string> blockedIPs, HashSet<string> blockedProcessNames)
+        public List<ConnectionInfo> GetConnections(HashSet<string> ignoredApps, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
         {
             var list = new List<ConnectionInfo>();
             int bufferSize = 0;
@@ -273,7 +273,7 @@ namespace MyFirewall.Desktop.Services
             return list;
         }
 
-        public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, string> blockedIPs, HashSet<string> blockedProcessNames)
+        public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
         {
             var alerts = new List<AlertEntry>();
             if (blockedProcessNames.Count == 0 && blockedIPs.Count == 0) return alerts;
@@ -290,7 +290,7 @@ namespace MyFirewall.Desktop.Services
 
                 if (fwService.AddBlockRule(conn.Destination, conn.ApplicationName))
                 {
-                    blockedIPs[conn.Destination] = conn.ApplicationName;
+                    blockedIPs[conn.Destination] = new BlockedIPMetadata { Application = conn.ApplicationName, Timestamp = DateTime.Now };
                     alerts.Add(new AlertEntry
                     {
                         Message = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",

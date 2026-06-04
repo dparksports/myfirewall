@@ -215,6 +215,7 @@
                               VirtualizingPanel.VirtualizationMode="Recycling">
                         <DataGrid.RowStyle>
                             <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+                                <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
                                 <Setter Property="ToolTip">
                                     <Setter.Value>
                                         <StackPanel Margin="4">
@@ -243,13 +244,13 @@
                                         <ContextMenu>
                                             <!-- Fix: Pass both IP and AppName for proper blocking -->
                                             <MenuItem Header="🛑  Block this address"
-                                                      Command="{Binding DataContext.BlockIPCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                      Command="{Binding PlacementTarget.Tag.BlockIPCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding}"/>
                                             <MenuItem Header="👁  Hide this app"
-                                                      Command="{Binding DataContext.IgnoreAppCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                      Command="{Binding PlacementTarget.Tag.IgnoreAppCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding ApplicationName}"/>
                                             <MenuItem Header="⏹  Stop this app"
-                                                      Command="{Binding DataContext.StopAppCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                      Command="{Binding PlacementTarget.Tag.StopAppCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding PID}"/>
                                         </ContextMenu>
                                     </Setter.Value>
@@ -382,7 +383,11 @@
                                             </Grid.ColumnDefinitions>
                                             <StackPanel Grid.Column="0">
                                                 <TextBlock Text="{Binding IP}" Foreground="{DynamicResource StatusRed}" FontWeight="SemiBold" FontSize="12"/>
-                                                <TextBlock Text="{Binding Application}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Application}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock Text=" • " FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                                    <TextBlock Text="{Binding DisplayTimestamp}" FontSize="10" Foreground="{DynamicResource TextMuted}"/>
+                                                </StackPanel>
                                             </StackPanel>
                                             <Button Grid.Column="1" Content="✕" Width="24" Height="24"
                                                     Style="{StaticResource GhostButton}" FontSize="11"

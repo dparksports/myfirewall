@@ -49,10 +49,18 @@ namespace MyFirewall.Desktop.Models
         };
     }
 
+    public class BlockedIPMetadata
+    {
+        public string Application { get; set; } = "Unknown";
+        public DateTime Timestamp { get; set; } = DateTime.Now;
+    }
+
     public class BlockedIPEntry
     {
         public string IP { get; set; } = "";
         public string Application { get; set; } = "";
+        public DateTime Timestamp { get; set; } = DateTime.Now;
+        public string DisplayTimestamp => Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
     }
 
     public class IgnoredAppEntry

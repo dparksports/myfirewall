@@ -81,6 +81,12 @@ class NetFwRuleClass { }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+public class BlockedIPMetadata
+{
+    public string ProcessName { get; set; } = "Unknown";
+    public DateTime Timestamp { get; set; } = DateTime.Now;
+}
+
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 class Program
 {
@@ -284,6 +290,29 @@ class Program
         private readonly object _lock = new();
         public bool IsRunning { get; private set; }
 
+        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ConnectionDriven;
+        public ProcessMonitoringStrategy MonitoringStrategy => _monitoringStrategy;
+        public Action<string>? OnProactiveAlert { get; set; }
+        private readonly HashSet<int> _proactiveEvaluatedPids = new();
+
+        public void SetMonitoringStrategy(ProcessMonitoringStrategy strategy)
+        {
+            if (_monitoringStrategy == strategy) return;
+            _monitoringStrategy = strategy;
+
+            if (IsRunning)
+            {
+                Stop();
+                Start();
+            }
+        }
+
+        public void Stop()
+        {
+            _session?.Dispose();
+            _session = null;
+        }
+
         public void Start()
         {
             try
@@ -294,8 +323,19 @@ class Program
 
                 Thread.Sleep(500); // Windows needs a moment to release the kernel handle
 
+                lock (_lock)
+                {
+                    _proactiveEvaluatedPids.Clear();
+                }
+
                 _session = new TraceEventSession(SessionName) { StopOnDispose = true };
-                _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+                
+                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP;
+                if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
+                {
+                    keywords |= KernelTraceEventParser.Keywords.Process;
+                }
+                _session.EnableKernelProvider(keywords);
 
                 _session.Source.Kernel.TcpIpSend += data =>
                 {
@@ -306,6 +346,18 @@ class Program
                 {
                     lock (_lock)
                         _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
+                };
+
+                _session.Source.Kernel.ProcessStart += data =>
+                {
+                    if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw && data.ProcessID > 0)
+                    {
+                        string imageName = data.ImageFileName;
+                        if (imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Task.Run(() => HandleWebView2Spawned(data.ProcessID));
+                        }
+                    }
                 };
 
                 Task.Run(() =>
@@ -321,13 +373,126 @@ class Program
             }
         }
 
+        private void HandleWebView2Spawned(int pid)
+        {
+            lock (_lock)
+            {
+                if (_proactiveEvaluatedPids.Contains(pid)) return;
+                _proactiveEvaluatedPids.Add(pid);
+            }
+
+            try
+            {
+                string parentProcessName = "Unknown";
+                string executablePath = "N/A";
+                string signature = "Unsigned / Unknown";
+
+                IntPtr hProcess = IntPtr.Zero;
+                try
+                {
+                    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid);
+                    if (hProcess == IntPtr.Zero)
+                    {
+                        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                    }
+
+                    if (hProcess != IntPtr.Zero)
+                    {
+                        var sb = new System.Text.StringBuilder(1024);
+                        int size = sb.Capacity;
+                        if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                        {
+                            executablePath = sb.ToString();
+                        }
+
+                        var pbi = new PROCESS_BASIC_INFORMATION();
+                        int status = NtQueryInformationProcess(hProcess, 0, ref pbi, Marshal.SizeOf(pbi), out _);
+                        if (status == 0)
+                        {
+                            int parentPid = pbi.InheritedFromUniqueProcessId.ToInt32();
+                            if (parentPid > 0)
+                            {
+                                try
+                                {
+                                    using var parent = Process.GetProcessById(parentPid);
+                                    parentProcessName = $"{parent.ProcessName} (PID {parentPid})";
+                                }
+                                catch
+                                {
+                                    parentProcessName = $"PID {parentPid} (Exited)";
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    try
+                    {
+                        using var process = Process.GetProcessById(pid);
+                        executablePath = process.MainModule?.FileName ?? "N/A";
+                    }
+                    catch { }
+                }
+                finally
+                {
+                    if (hProcess != IntPtr.Zero)
+                    {
+                        CloseHandle(hProcess);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
+                {
+                    try
+                    {
+                        using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(executablePath))
+                        {
+                            using (var cert2 = new System.Security.Cryptography.X509Certificates.X509Certificate2(cert))
+                            {
+                                string subject = cert2.Subject;
+                                if (subject.Contains("CN="))
+                                {
+                                    int start = subject.IndexOf("CN=") + 3;
+                                    int end = subject.IndexOf(',', start);
+                                    if (end > start)
+                                    {
+                                        signature = "Signed by: " + subject.Substring(start, end - start);
+                                    }
+                                    else
+                                    {
+                                        signature = "Signed by: " + subject.Substring(start);
+                                    }
+                                }
+                                else
+                                {
+                                    signature = "Signed: " + cert2.Subject;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        signature = "Unsigned";
+                    }
+                }
+
+                string color = signature.Contains("Signed") ? "green" : "red";
+                OnProactiveAlert?.Invoke($"PROACTIVE: WebView2 Spawned PID {pid} by {parentProcessName}. Signature: [{color}]{signature}[/]");
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(EtwLogFile, $"Proactive error for PID {pid}: {ex}\n");
+            }
+        }
+
         public (long Sent, long Received) GetStats(int pid)
         {
             lock (_lock)
                 return (_bytesSent.GetValueOrDefault(pid), _bytesReceived.GetValueOrDefault(pid));
         }
 
-        public void Dispose() => _session?.Dispose();
+        public void Dispose() => Stop();
     }
 
     #endregion
@@ -335,7 +500,7 @@ class Program
     #region State
 
     static List<string>              _ignoredProcesses    = new();
-    static Dictionary<string, string> _blockedIPs         = new();
+    static Dictionary<string, BlockedIPMetadata> _blockedIPs  = new();
     static HashSet<string>           _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
     static System.Collections.Concurrent.ConcurrentDictionary<string, string> _domainCache  = new();
     static Dictionary<string, DateTime> _connectionStartTimes = new();
@@ -394,6 +559,14 @@ class Program
         LoadAllData();
         RebuildBlockedProcessNames();
         _etwTracker = new EtwNetworkTracker();
+        _etwTracker.OnProactiveAlert = alertMsg =>
+        {
+            lock (_alertLock)
+            {
+                _alertLog.Add($"[{DateTime.Now:HH:mm:ss}] {alertMsg}");
+                if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+            }
+        };
 
         try { _etwTracker.Start(); }
         catch (Exception ex)
@@ -445,7 +618,7 @@ class Program
 
         var table = new Table().Border(TableBorder.Rounded).Expand();
         table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | L Lists | H Help[/]");
+        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | T Toggle Strategy | L Lists | H Help[/]");
 
         table.AddColumn("#");
         table.AddColumn("Process");
@@ -506,11 +679,12 @@ class Program
             grid.AddColumn(); grid.AddColumn(); grid.AddColumn();
 
             var bTable = new Table().Border(TableBorder.Rounded)
-                .AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain");
+                .AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain").AddColumn("Blocked At");
             foreach (var kvp in _blockedIPs.OrderBy(x => x.Key))
-                bTable.AddRow(kvp.Key, $"[grey]{Markup.Escape(kvp.Value)}[/]",
-                    $"[blue]{Markup.Escape(GetCachedDomain(kvp.Key))}[/]");
-            if (_blockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "");
+                bTable.AddRow(kvp.Key, $"[grey]{Markup.Escape(kvp.Value.ProcessName)}[/]",
+                    $"[blue]{Markup.Escape(GetCachedDomain(kvp.Key))}[/]",
+                    $"[grey]{kvp.Value.Timestamp:yyyy-MM-dd HH:mm}[/]");
+            if (_blockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "", "");
 
             var iTable = new Table().Border(TableBorder.Rounded).AddColumn("[yellow]Ignored Procs[/]");
             foreach (var proc in _ignoredProcesses.OrderBy(x => x)) iTable.AddRow(Markup.Escape(proc));
@@ -547,6 +721,23 @@ class Program
             case ConsoleKey.I: Console.Clear(); IgnoreProcessInteractive(); break;
             case ConsoleKey.B: Console.Clear(); ManageBlockedIPsInteractive(); break;
             case ConsoleKey.P: Console.Clear(); ShowProcessDetailsInteractive(); break;
+            case ConsoleKey.T:
+                if (_etwTracker != null)
+                {
+                    var nextStrategy = _etwTracker.MonitoringStrategy == ProcessMonitoringStrategy.ConnectionDriven
+                        ? ProcessMonitoringStrategy.ProcessStartEtw
+                        : ProcessMonitoringStrategy.ConnectionDriven;
+                    
+                    _etwTracker.SetMonitoringStrategy(nextStrategy);
+                    
+                    lock (_alertLock)
+                    {
+                        _alertLog.Add($"[blue]INFO: Switched monitoring strategy to {nextStrategy}[/]");
+                        if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+                    }
+                    Console.Clear();
+                }
+                break;
             case ConsoleKey.L: Console.Clear(); _showExtraLists = !_showExtraLists; break;
             case ConsoleKey.H:
             case ConsoleKey.F1:
@@ -560,6 +751,7 @@ class Program
         AnsiConsole.Clear();
 
         string etwStatus  = _etwTracker?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]";
+        string strategy   = _etwTracker?.MonitoringStrategy.ToString() ?? "N/A";
         string blockedCnt = _blockedIPs.Count.ToString();
         string ignoredCnt = _ignoredProcesses.Count.ToString();
 
@@ -570,12 +762,14 @@ class Program
             $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
             $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
             $"  [cyan]P[/]       Process Intelligence / Details (interactive)\n" +
+            $"  [cyan]T[/]       Toggle Threat Intel Strategy (runtime)\n" +
             $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
             $"  [cyan]H / F1[/]  Show this help screen\n\n" +
             $"[bold cyan]Status[/]\n" +
-            $"  ETW Tracing : {etwStatus}\n" +
-            $"  Blocked IPs : [red]{blockedCnt}[/]\n" +
-            $"  Ignored     : [yellow]{ignoredCnt}[/]\n\n" +
+            $"  ETW Tracing     : {etwStatus}\n" +
+            $"  Active Strategy : [cyan]{strategy}[/]\n" +
+            $"  Blocked IPs     : [red]{blockedCnt}[/]\n" +
+            $"  Ignored         : [yellow]{ignoredCnt}[/]\n\n" +
             $"[bold cyan]Firewall Rules[/]\n" +
             $"  Rules are created natively via Windows Firewall COM API.\n" +
             $"  Display name format: [grey]{FirewallRulePrefix}-<process>-<ip>[/]\n" +
@@ -801,7 +995,7 @@ class Program
         var choices = allIPs.Select(ip =>
         {
             string proc = activeIPs.TryGetValue(ip, out var ap) ? ap
-                        : (_blockedIPs.TryGetValue(ip, out var bp) ? bp : "Unknown");
+                        : (_blockedIPs.TryGetValue(ip, out var bp) ? bp.ProcessName : "Unknown");
             return $"{ip} ({Markup.Escape(proc)})";
         }).ToList();
 
@@ -830,7 +1024,7 @@ class Program
         var newlyBlocked   = selectedIPs.Except(_blockedIPs.Keys).ToList();
         var newlyUnblocked = _blockedIPs.Keys.Except(selectedIPs).ToList();
 
-        var newDict = new Dictionary<string, string>();
+        var newDict = new Dictionary<string, BlockedIPMetadata>();
         foreach (var s in selected)
         {
             int openParen = s.IndexOf('(');
@@ -840,13 +1034,21 @@ class Program
                 string ip = s.Substring(0, openParen).Trim();
                 if (!IsValidIP(ip)) continue;
                 string proc = s.Substring(openParen + 1, closeParen - openParen - 1).Trim();
-                newDict[ip] = proc;
+                DateTime timestamp = DateTime.Now;
+                if (_blockedIPs.TryGetValue(ip, out var existing))
+                    timestamp = existing.Timestamp;
+                newDict[ip] = new BlockedIPMetadata { ProcessName = proc, Timestamp = timestamp };
             }
             else
             {
                 string ip = s.Split(' ')[0];
                 if (IsValidIP(ip))
-                    newDict[ip] = "Unknown";
+                {
+                    DateTime timestamp = DateTime.Now;
+                    if (_blockedIPs.TryGetValue(ip, out var existing))
+                        timestamp = existing.Timestamp;
+                    newDict[ip] = new BlockedIPMetadata { ProcessName = "Unknown", Timestamp = timestamp };
+                }
             }
         }
 
@@ -857,7 +1059,7 @@ class Program
         // Fix #1/#6/#7: Use FirewallManager instead of powershell.exe
         foreach (var ip in newlyBlocked)
         {
-            string proc = _blockedIPs.TryGetValue(ip, out var p) ? p : "Unknown";
+            string proc = _blockedIPs.TryGetValue(ip, out var p) ? p.ProcessName : "Unknown";
             bool added  = FirewallManager.AddBlockRule(ip, proc);
             if (!added)
                 AnsiConsole.MarkupLine($"[yellow]Note: Firewall rule for {ip} may already exist or failed — check {CrashLogFile}[/]");
@@ -894,7 +1096,7 @@ class Program
             // Fix #1/#6/#7: native COM — no powershell.exe
             if (FirewallManager.AddBlockRule(conn.RemoteIP, conn.ProcessName))
             {
-                _blockedIPs[conn.RemoteIP] = conn.ProcessName;
+                _blockedIPs[conn.RemoteIP] = new BlockedIPMetadata { ProcessName = conn.ProcessName, Timestamp = DateTime.Now };
                 RebuildBlockedProcessNames();
                 SaveBlockList();
 
@@ -1081,7 +1283,15 @@ class Program
                     var parts = line.Split('|');
                     string ip = parts[0].Trim();
                     if (IsValidIP(ip)) // Fix #16: validate on load
-                        _blockedIPs[ip] = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                    {
+                        string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                        DateTime timestamp = DateTime.Now;
+                        if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt))
+                        {
+                            timestamp = dt;
+                        }
+                        _blockedIPs[ip] = new BlockedIPMetadata { ProcessName = app, Timestamp = timestamp };
+                    }
                 }
             }
         }
@@ -1117,7 +1327,7 @@ class Program
 
     static void SaveBlockList()
     {
-        try   { File.WriteAllLines(BlockedFile, _blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value}")); }
+        try   { File.WriteAllLines(BlockedFile, _blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value.ProcessName}|{kvp.Value.Timestamp:O}")); }
         catch (Exception ex) { LogCrash($"SaveBlockList: {ex.Message}"); }
     }
 
@@ -1153,6 +1363,12 @@ class Program
     }
 
     #endregion
+}
+
+enum ProcessMonitoringStrategy
+{
+    ConnectionDriven,
+    ProcessStartEtw
 }
 
 class TcpConnectionInfo

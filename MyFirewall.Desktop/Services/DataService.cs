@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using MyFirewall.Desktop.Models;
 
 namespace MyFirewall.Desktop.Services
 {
@@ -26,9 +27,9 @@ namespace MyFirewall.Desktop.Services
             _crashLogFile = Path.Combine(baseDir, "crash.log");
         }
 
-        public (Dictionary<string, string> BlockedIPs, HashSet<string> IgnoredApps) LoadData()
+        public (Dictionary<string, BlockedIPMetadata> BlockedIPs, HashSet<string> IgnoredApps) LoadData()
         {
-            var blocked = new Dictionary<string, string>();
+            var blocked = new Dictionary<string, BlockedIPMetadata>();
             var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             try
@@ -49,7 +50,15 @@ namespace MyFirewall.Desktop.Services
                         var parts = line.Split('|');
                         string ip = parts[0].Trim();
                         if (IPAddress.TryParse(ip, out _))
-                            blocked[ip] = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                        {
+                            string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                            DateTime timestamp = DateTime.Now;
+                            if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt))
+                            {
+                                timestamp = dt;
+                            }
+                            blocked[ip] = new BlockedIPMetadata { Application = app, Timestamp = timestamp };
+                        }
                     }
                 }
             }
@@ -64,9 +73,9 @@ namespace MyFirewall.Desktop.Services
             catch (Exception ex) { _logError($"SaveIgnoreList: {ex.Message}"); }
         }
 
-        public void SaveBlocked(Dictionary<string, string> blockedIPs)
+        public void SaveBlocked(Dictionary<string, BlockedIPMetadata> blockedIPs)
         {
-            try { File.WriteAllLines(_blockedFile, blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value}")); }
+            try { File.WriteAllLines(_blockedFile, blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value.Application}|{kvp.Value.Timestamp:O}")); }
             catch (Exception ex) { _logError($"SaveBlockList: {ex.Message}"); }
         }
 
@@ -74,7 +83,7 @@ namespace MyFirewall.Desktop.Services
         /// Export a full report of blocked IPs and recent alerts to a timestamped file.
         /// Returns the path to the exported file.
         /// </summary>
-        public string ExportReport(Dictionary<string, string> blockedIPs, IEnumerable<string> ignoredApps, IEnumerable<string> alerts)
+        public string ExportReport(Dictionary<string, BlockedIPMetadata> blockedIPs, IEnumerable<string> ignoredApps, IEnumerable<string> alerts)
         {
             string baseDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
             string fileName = $"report_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
@@ -92,7 +101,7 @@ namespace MyFirewall.Desktop.Services
                 sb.AppendLine($"  Blocked IPs ({blockedIPs.Count}):");
                 sb.AppendLine("  ─────────────────────────────────────────────────────");
                 foreach (var kvp in blockedIPs.OrderBy(x => x.Key))
-                    sb.AppendLine($"    {kvp.Key,-20} │ {kvp.Value}");
+                    sb.AppendLine($"    {kvp.Key,-20} │ {kvp.Value.Application,-25} │ {kvp.Value.Timestamp:yyyy-MM-dd HH:mm:ss}");
                 if (blockedIPs.Count == 0) sb.AppendLine("    (none)");
                 sb.AppendLine();
 

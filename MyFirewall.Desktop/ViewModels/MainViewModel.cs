@@ -24,7 +24,7 @@ namespace MyFirewall.Desktop.ViewModels
         private readonly DateTime _startTime = DateTime.Now;
         private int _pruneCounter;
 
-        private Dictionary<string, string> _blockedIPsDict = new();
+        private Dictionary<string, BlockedIPMetadata> _blockedIPsDict = new();
         private HashSet<string> _ignoredAppsSet = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
 
@@ -241,7 +241,7 @@ namespace MyFirewall.Desktop.ViewModels
 
             BlockedIPs.Clear();
             foreach (var kvp in _blockedIPsDict.OrderBy(x => x.Key))
-                BlockedIPs.Add(new BlockedIPEntry { IP = kvp.Key, Application = kvp.Value });
+                BlockedIPs.Add(new BlockedIPEntry { IP = kvp.Key, Application = kvp.Value.Application, Timestamp = kvp.Value.Timestamp });
 
             BlockedCount = BlockedIPs.Count;
 
@@ -388,7 +388,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 if (_firewallService.AddBlockRule(ip, app))
                 {
-                    _blockedIPsDict[ip] = app;
+                    _blockedIPsDict[ip] = new BlockedIPMetadata { Application = app, Timestamp = DateTime.Now };
                     _dataService.SaveBlocked(_blockedIPsDict);
                     SyncObservables();
                     AddAlert($"Blocked {ip} ({app})", AlertSeverity.Warning);
