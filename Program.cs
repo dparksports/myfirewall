@@ -103,6 +103,11 @@ class Program
     private const double GeoThrottleSeconds       = 1.5;
     private const int    GeoMaxRetries            = 3;
 
+    private static string BlockedFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, BlockedFile);
+    private static string IgnoredFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, IgnoredFile);
+    private static string CrashLogFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CrashLogFile);
+    private static string EtwLogFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, EtwLogFile);
+
     // NET_FW_ACTION_ and NET_FW_RULE_DIR_ enum values for COM interop
     private const int NET_FW_ACTION_BLOCK  = 0;
     private const int NET_FW_RULE_DIR_OUT  = 2;
@@ -424,7 +429,7 @@ class Program
                 Task.Run(() =>
                 {
                     try   { IsRunning = true; _session.Source.Process(); }
-                    catch (Exception ex) { File.AppendAllText(EtwLogFile, $"{DateTime.Now}: {ex}\n"); }
+                    catch (Exception ex) { File.AppendAllText(EtwLogFilePath, $"{DateTime.Now}: {ex}\n"); }
                     finally { IsRunning = false; }
                 });
             }
@@ -549,7 +554,7 @@ class Program
             }
             catch (Exception ex)
             {
-                File.AppendAllText(EtwLogFile, $"Proactive error for PID {pid}: {ex}\n");
+                File.AppendAllText(EtwLogFilePath, $"Proactive error for PID {pid}: {ex}\n");
             }
         }
 
@@ -1447,15 +1452,15 @@ class Program
     {
         try
         {
-            if (File.Exists(IgnoredFile))
-                _ignoredProcesses = File.ReadAllLines(IgnoredFile)
+            if (File.Exists(IgnoredFilePath))
+                _ignoredProcesses = File.ReadAllLines(IgnoredFilePath)
                     .Where(x => !string.IsNullOrWhiteSpace(x))
                     .Select(x => x.Trim().ToLower())
                     .ToList();
 
-            if (File.Exists(BlockedFile))
+            if (File.Exists(BlockedFilePath))
             {
-                foreach (var line in File.ReadAllLines(BlockedFile))
+                foreach (var line in File.ReadAllLines(BlockedFilePath))
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     var parts = line.Split('|');
@@ -1499,13 +1504,13 @@ class Program
     // or on shutdown — never in the main loop timer.
     static void SaveIgnoreList()
     {
-        try   { File.WriteAllLines(IgnoredFile, _ignoredProcesses); }
+        try   { File.WriteAllLines(IgnoredFilePath, _ignoredProcesses); }
         catch (Exception ex) { LogCrash($"SaveIgnoreList: {ex.Message}"); }
     }
 
     static void SaveBlockList()
     {
-        try   { File.WriteAllLines(BlockedFile, _blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value.ProcessName}|{kvp.Value.Timestamp:O}")); }
+        try   { File.WriteAllLines(BlockedFilePath, _blockedIPs.Select(kvp => $"{kvp.Key}|{kvp.Value.ProcessName}|{kvp.Value.Timestamp:O}")); }
         catch (Exception ex) { LogCrash($"SaveBlockList: {ex.Message}"); }
     }
 
@@ -1518,7 +1523,7 @@ class Program
         !string.IsNullOrWhiteSpace(ip) && IPAddress.TryParse(ip, out _);
 
     internal static void LogCrash(string message) =>
-        File.AppendAllText(CrashLogFile, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+        File.AppendAllText(CrashLogFilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
 
     static bool IsAdministrator() =>
         new System.Security.Principal.WindowsPrincipal(
