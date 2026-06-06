@@ -29,6 +29,14 @@ namespace MyFirewall.Desktop.Models
         public bool IsBlocked { get; set; }
         public string CountryCode { get; set; } = "";
 
+        // New properties for ghosted/closed connections
+        public bool IsGhosted { get; set; }
+        public string DisplayProcessName => IsGhosted ? $"{ApplicationName} (Closing)" : ApplicationName;
+        public double Opacity => IsGhosted ? 0.6 : 1.0;
+        public string GhostTooltip => IsGhosted 
+            ? $"This connection was created by {ApplicationName}. The application has been closed, but Windows is taking a few seconds to finish closing the network connection." 
+            : "";
+
         // New process metadata fields
         public string ParentProcessName { get; set; } = "Unknown";
         public string ExecutablePath { get; set; } = "N/A";

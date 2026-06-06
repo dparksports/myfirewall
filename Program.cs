@@ -512,6 +512,7 @@ class Program
     static HashSet<string>           _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
     static System.Collections.Concurrent.ConcurrentDictionary<string, string> _domainCache  = new();
     static Dictionary<string, DateTime> _connectionStartTimes = new();
+    static Dictionary<string, string> _socketHistory = new();
     static EtwNetworkTracker?        _etwTracker;
     static volatile bool             _running             = true;
     static bool                      _showExtraLists      = false;
@@ -650,9 +651,13 @@ class Program
             bool isBlocked = _blockedIPs.ContainsKey(c.RemoteIP) || _blockedProcessNames.Contains(c.ProcessName);
             string ipColor = isBlocked ? "red" : "white";
 
+            string processDisplay = c.IsGhosted 
+                ? $"[grey]{Markup.Escape(c.ProcessName)} (closed)[/]" 
+                : $"[bold white]{Markup.Escape(c.ProcessName)}[/]";
+
             table.AddRow(
                 (i + 1).ToString(),
-                $"[bold white]{Markup.Escape(c.ProcessName)}[/]",
+                processDisplay,
                 $"[grey]{c.PID}[/]",
                 $"[{ipColor}]{Markup.Escape(c.RemoteIP)}[/]",
                 $"[magenta]{Markup.Escape(c.Geo)}[/]",
@@ -1217,15 +1222,35 @@ class Program
                     if (remoteIP.StartsWith("127.") || remoteIP == "0.0.0.0") continue;
 
                     int    pid   = (int)row.dwOwningPid;
-                    string pName;
+                    string pName = "Unknown";
+                    bool isGhosted = false;
+                    
+                    int remotePort = IPAddress.NetworkToHostOrder((short)(row.dwRemotePort & 0xFFFF)) & 0xFFFF;
+                    int localPort = IPAddress.NetworkToHostOrder((short)(row.dwLocalPort & 0xFFFF)) & 0xFFFF;
+                    string socketKey = $"{remoteIP}:{remotePort}-{localPort}";
+
                     try
                     {
-                        pName = Process.GetProcessById(pid).ProcessName;
-                        if (!includeIgnored && _ignoredProcesses.Contains(pName.ToLower())) continue;
+                        if (pid > 0)
+                            pName = Process.GetProcessById(pid).ProcessName;
+                        else
+                            pName = "Idle";
                     }
-                    catch { continue; }
+                    catch { pName = "Unknown"; }
 
-                    string key = $"{pid}-{remoteIP}";
+                    if ((pid == 0 || pName == "Idle" || pName == "Unknown") && _socketHistory.TryGetValue(socketKey, out string? originalName))
+                    {
+                        pName = originalName;
+                        isGhosted = true;
+                    }
+                    else if (pid > 0 && pName != "Idle" && pName != "Unknown")
+                    {
+                        _socketHistory[socketKey] = pName;
+                    }
+
+                    if (!includeIgnored && _ignoredProcesses.Contains(pName.ToLower())) continue;
+
+                    string key = $"{pid}-{remoteIP}:{remotePort}-{localPort}";
                     if (!_connectionStartTimes.ContainsKey(key))
                         _connectionStartTimes[key] = DateTime.Now;
 
@@ -1234,8 +1259,11 @@ class Program
                     list.Add(new TcpConnectionInfo
                     {
                         ProcessName   = pName,
+                        IsGhosted     = isGhosted,
                         PID           = pid,
                         RemoteIP      = remoteIP,
+                        RemotePort    = remotePort,
+                        LocalPort     = localPort,
                         Geo           = GetCachedGeo(remoteIP),
                         Domain        = GetCachedDomain(remoteIP),
                         Duration      = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
@@ -1247,6 +1275,14 @@ class Program
             }
         }
         finally { Marshal.FreeHGlobal(ptr); }
+
+        var activeKeys = new HashSet<string>(list.Select(c => $"{c.PID}-{c.RemoteIP}:{c.RemotePort}-{c.LocalPort}"));
+        var staleKeys = _connectionStartTimes.Keys.Where(k => !activeKeys.Contains(k)).ToList();
+        foreach (var key in staleKeys) _connectionStartTimes.Remove(key);
+
+        var activeSocketKeys = new HashSet<string>(list.Select(c => $"{c.RemoteIP}:{c.RemotePort}-{c.LocalPort}"));
+        var staleSocketKeys = _socketHistory.Keys.Where(k => !activeSocketKeys.Contains(k)).ToList();
+        foreach (var key in staleSocketKeys) _socketHistory.Remove(key);
 
         return list.OrderByDescending(x => x.ProcessName).ToList();
     }
@@ -1451,9 +1487,12 @@ class TcpConnectionInfo
     public string RemoteIP      { get; set; } = "";
     public string Geo           { get; set; } = "";
     public string Domain        { get; set; } = "";
+    public int    RemotePort    { get; set; }
+    public int    LocalPort     { get; set; }
     public string Duration      { get; set; } = "";
     public string TotalSent     { get; set; } = "";
     public string TotalReceived { get; set; } = "";
+    public bool   IsGhosted     { get; set; }
 }
 
 static class SystemSettingsManager

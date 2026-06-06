@@ -32,6 +32,7 @@ namespace MyFirewall.Desktop.Services
         private bool _disposed;
 
         private readonly Dictionary<string, DateTime> _connectionStartTimes = new();
+        private readonly Dictionary<string, string> _socketHistory = new();
         public bool IsRunning { get; private set; }
 
         private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ConnectionDriven;
@@ -337,12 +338,35 @@ namespace MyFirewall.Desktop.Services
             Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
         {
             string appName = "Unknown";
+            bool isGhosted = false;
+            string socketKey = $"{remoteIP}:{remotePort}-{localPort}";
+
             try
             {
-                appName = Process.GetProcessById(pid).ProcessName;
-                if (ignoredApps.Contains(appName.ToLower())) return;
+                if (pid > 0)
+                {
+                    appName = Process.GetProcessById(pid).ProcessName;
+                }
+                else
+                {
+                    appName = "Idle";
+                }
             }
-            catch { return; }
+            catch { appName = "Unknown"; } // Process died before we could query it
+
+            // If it's Idle or dead, check our history cache
+            if ((pid == 0 || appName == "Idle" || appName == "Unknown") && _socketHistory.TryGetValue(socketKey, out var originalName))
+            {
+                appName = originalName;
+                isGhosted = true;
+            }
+            else if (pid > 0 && appName != "Idle" && appName != "Unknown")
+            {
+                // Cache valid process names
+                _socketHistory[socketKey] = appName;
+            }
+
+            if (ignoredApps.Contains(appName.ToLower())) return;
 
             string key = $"{pid}-{remoteIP}:{remotePort}-{localPort}";
             if (!_connectionStartTimes.ContainsKey(key)) _connectionStartTimes[key] = DateTime.Now;
@@ -362,6 +386,7 @@ namespace MyFirewall.Desktop.Services
             list.Add(new ConnectionInfo
             {
                 ApplicationName  = appName,
+                IsGhosted        = isGhosted,
                 PID              = pid,
                 Destination      = remoteIP,
                 RemotePort       = remotePort,
@@ -395,6 +420,12 @@ namespace MyFirewall.Desktop.Services
 
             foreach (var key in staleKeys)
                 _connectionStartTimes.Remove(key);
+
+            // Also prune socket history for connections that are truly gone
+            var activeSocketKeys = new HashSet<string>(activeConnections.Select(c => $"{c.Destination}:{c.RemotePort}-{c.LocalPort}"));
+            var staleSocketKeys = _socketHistory.Keys.Where(k => !activeSocketKeys.Contains(k)).ToList();
+            foreach (var key in staleSocketKeys)
+                _socketHistory.Remove(key);
         }
 
         public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)

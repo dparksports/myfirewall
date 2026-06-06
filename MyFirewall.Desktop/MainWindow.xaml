@@ -290,7 +290,20 @@
                             </DataGridTemplateColumn>
 
                             <!-- Application Name -->
-                            <DataGridTextColumn Header="Application" Binding="{Binding ApplicationName}" FontWeight="SemiBold" Width="*" MinWidth="100"/>
+                            <DataGridTextColumn Header="Application" Binding="{Binding DisplayProcessName}" FontWeight="SemiBold" Width="*" MinWidth="100">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Opacity" Value="1.0"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsGhosted}" Value="True">
+                                                <Setter Property="Opacity" Value="0.6"/>
+                                                <Setter Property="ToolTip" Value="{Binding GhostTooltip}"/>
+                                                <Setter Property="FontStyle" Value="Italic"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
 
                             <!-- Destination with port -->
                             <DataGridTemplateColumn Header="Destination" Width="150" SortMemberPath="Destination">
