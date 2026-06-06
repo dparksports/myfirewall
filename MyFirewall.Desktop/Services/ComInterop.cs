@@ -26,18 +26,18 @@ namespace MyFirewall.Desktop.Services
     interface INetFwPolicy2
     {
         [DispId(1)] int CurrentProfileTypes { get; }
-        [DispId(2)] bool FirewallEnabled { [param: In] set; get; }
-        [DispId(3)] object ExcludedInterfaces { [param: In] set; get; }
-        [DispId(4)] bool BlockAllInboundTraffic { [param: In] set; get; }
-        [DispId(5)] bool NotificationsDisabled { [param: In] set; get; }
-        [DispId(6)] bool UnicastResponsesToMulticastBroadcastDisabled { [param: In] set; get; }
+        [DispId(2)] bool FirewallEnabled { get; set; }
+        [DispId(3)] object ExcludedInterfaces { get; set; }
+        [DispId(4)] bool BlockAllInboundTraffic { get; set; }
+        [DispId(5)] bool NotificationsDisabled { get; set; }
+        [DispId(6)] bool UnicastResponsesToMulticastBroadcastDisabled { get; set; }
         [DispId(7)] INetFwRules Rules { get; }
         [DispId(8)] object ServiceRestriction { get; }
         [DispId(9)] void EnableRuleGroup(int profileTypesBitmask, string group, bool enable);
         [DispId(10)] bool IsRuleGroupEnabled(int profileTypesBitmask, string group);
         [DispId(11)] void RestoreLocalFirewallDefaults();
-        [DispId(12)] NET_FW_ACTION DefaultInboundAction { [param: In] set; get; }
-        [DispId(13)] NET_FW_ACTION DefaultOutboundAction { [param: In] set; get; }
+        [DispId(12)] NET_FW_ACTION DefaultInboundAction { get; set; }
+        [DispId(13)] NET_FW_ACTION DefaultOutboundAction { get; set; }
         [DispId(14)] bool IsRuleGroupCurrentlyEnabled(string group);
         [DispId(15)] object LocalPolicyModifyState { get; }
     }
@@ -57,24 +57,24 @@ namespace MyFirewall.Desktop.Services
     [ComImport, Guid("AF230D27-BABA-4E42-ACED-F524F22CFCE2"), CoClass(typeof(NetFwRuleClass))]
     interface INetFwRule
     {
-        [DispId(1)] string Name { [param: In] set; get; }
-        [DispId(2)] string Description { [param: In] set; get; }
-        [DispId(3)] string ApplicationName { [param: In] set; get; }
-        [DispId(4)] string serviceName { [param: In] set; get; }
-        [DispId(5)] int Protocol { [param: In] set; get; }
-        [DispId(6)] string LocalPorts { [param: In] set; get; }
-        [DispId(7)] string RemotePorts { [param: In] set; get; }
-        [DispId(8)] string LocalAddresses { [param: In] set; get; }
-        [DispId(9)] string RemoteAddresses { [param: In] set; get; }
-        [DispId(10)] string IcmpTypesAndCodes { [param: In] set; get; }
-        [DispId(11)] NET_FW_RULE_DIRECTION Direction { [param: In] set; get; }
-        [DispId(12)] object Interfaces { [param: In] set; get; }
-        [DispId(13)] string InterfaceTypes { [param: In] set; get; }
-        [DispId(14)] bool Enabled { [param: In] set; get; }
-        [DispId(15)] string Grouping { [param: In] set; get; }
-        [DispId(16)] int Profiles { [param: In] set; get; }
-        [DispId(17)] bool EdgeTraversal { [param: In] set; get; }
-        [DispId(18)] NET_FW_ACTION Action { [param: In] set; get; }
+        [DispId(1)] string Name { get; set; }
+        [DispId(2)] string Description { get; set; }
+        [DispId(3)] string ApplicationName { get; set; }
+        [DispId(4)] string serviceName { get; set; }
+        [DispId(5)] int Protocol { get; set; }
+        [DispId(6)] string LocalPorts { get; set; }
+        [DispId(7)] string RemotePorts { get; set; }
+        [DispId(8)] string LocalAddresses { get; set; }
+        [DispId(9)] string RemoteAddresses { get; set; }
+        [DispId(10)] string IcmpTypesAndCodes { get; set; }
+        [DispId(11)] NET_FW_RULE_DIRECTION Direction { get; set; }
+        [DispId(12)] object Interfaces { get; set; }
+        [DispId(13)] string InterfaceTypes { get; set; }
+        [DispId(14)] bool Enabled { get; set; }
+        [DispId(15)] string Grouping { get; set; }
+        [DispId(16)] int Profiles { get; set; }
+        [DispId(17)] bool EdgeTraversal { get; set; }
+        [DispId(18)] NET_FW_ACTION Action { get; set; }
     }
 
     [ComImport, Guid("2C5BC43E-3369-4C33-AB0C-BE9469677AF4")]

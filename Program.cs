@@ -169,6 +169,68 @@ class Program
 
     #region FirewallManager — Native COM (no powershell.exe)
 
+    public enum NET_FW_IP_PROTOCOL { NET_FW_IP_PROTOCOL_TCP = 6, NET_FW_IP_PROTOCOL_UDP = 17, NET_FW_IP_PROTOCOL_ANY = 256 }
+    public enum NET_FW_RULE_DIRECTION { NET_FW_RULE_DIR_IN = 1, NET_FW_RULE_DIR_OUT = 2 }
+    public enum NET_FW_ACTION { NET_FW_ACTION_BLOCK = 0, NET_FW_ACTION_ALLOW = 1 }
+
+    [ComImport, Guid("98325047-C671-4174-8D81-DEFCD3F03186"), CoClass(typeof(NetFwPolicy2Class))]
+    interface INetFwPolicy2
+    {
+        int CurrentProfileTypes { get; }
+        bool FirewallEnabled { get; set; }
+        object ExcludedInterfaces { get; set; }
+        bool BlockAllInboundTraffic { get; set; }
+        bool NotificationsDisabled { get; set; }
+        bool UnicastResponsesToMulticastBroadcastDisabled { get; set; }
+        INetFwRules Rules { get; }
+        object ServiceRestriction { get; }
+        void EnableRuleGroup(int profileTypesBitmask, string group, bool enable);
+        bool IsRuleGroupEnabled(int profileTypesBitmask, string group);
+        void RestoreLocalFirewallDefaults();
+        NET_FW_ACTION DefaultInboundAction { get; set; }
+        NET_FW_ACTION DefaultOutboundAction { get; set; }
+        bool IsRuleGroupCurrentlyEnabled(string group);
+        object LocalPolicyModifyState { get; }
+    }
+
+    [ComImport, Guid("D46D2478-9AC9-4008-9DC7-5563CE5536CC")]
+    class NetFwPolicy2Class { }
+
+    [ComImport, Guid("9C4C6277-5027-441E-AFAE-CA1F542DA009")]
+    interface INetFwRules : System.Collections.IEnumerable
+    {
+        int Count { get; }
+        void Add(INetFwRule rule);
+        void Remove(string name);
+        INetFwRule Item(string name);
+    }
+
+    [ComImport, Guid("AF230D27-BABA-4E42-ACED-F524F22CFCE2"), CoClass(typeof(NetFwRuleClass))]
+    interface INetFwRule
+    {
+        string Name { get; set; }
+        string Description { get; set; }
+        string ApplicationName { get; set; }
+        string serviceName { get; set; }
+        int Protocol { get; set; }
+        string LocalPorts { get; set; }
+        string RemotePorts { get; set; }
+        string LocalAddresses { get; set; }
+        string RemoteAddresses { get; set; }
+        string IcmpTypesAndCodes { get; set; }
+        NET_FW_RULE_DIRECTION Direction { get; set; }
+        object Interfaces { get; set; }
+        string InterfaceTypes { get; set; }
+        bool Enabled { get; set; }
+        string Grouping { get; set; }
+        int Profiles { get; set; }
+        bool EdgeTraversal { get; set; }
+        NET_FW_ACTION Action { get; set; }
+    }
+
+    [ComImport, Guid("2C5BC43E-3369-4C33-AB0C-BE9469677AF4")]
+    class NetFwRuleClass { }
+
     /// <summary>
     /// Manages Windows Firewall rules via the native HNetCfg COM API.
     /// All calls are in-process and silent — no powershell.exe spawning.
@@ -178,10 +240,10 @@ class Program
         // Lock so concurrent calls from async tasks don't corrupt COM state
         private static readonly object _fwLock = new();
 
-        private static dynamic? GetPolicy()
+        private static INetFwPolicy2? GetPolicy()
         {
             var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", throwOnError: false);
-            return type is null ? null : Activator.CreateInstance(type);
+            return type is null ? null : (INetFwPolicy2)Activator.CreateInstance(type)!;
         }
 
         /// <summary>Returns true if any rule with the given display name already exists.</summary>
@@ -191,15 +253,14 @@ class Program
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return false;
 
-                    // Use dynamic to avoid vtable-based COM marshalling which causes memory corruption
-                    foreach (dynamic r in (dynamic)policy.Rules)
+                    foreach (INetFwRule r in policy.Rules)
                     {
                         try
                         {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
+                            if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
                                 return true;
                         }
                         catch { /* skip rules we can't read */ }
@@ -220,26 +281,23 @@ class Program
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) { LogCrash("FirewallManager: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
                     
-                    // Fix for AccessViolationException/E_INVALIDARG: Use dynamic for EVERYTHING.
-                    // .NET 8 has a regression where vtable-based COM marshalling for INetFwRule
-                    // causes memory corruption and E_INVALIDARG when adding rules.
-                    dynamic rule = Activator.CreateInstance(ruleType)!;
+                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
                     rule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
                     rule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
                     rule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     rule.RemoteAddresses = ip;
-                    rule.Direction       = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action          = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled         = true;
                     rule.Profiles        = 7; // All profiles
 
-                    ((dynamic)policy.Rules).Add(rule); // No cast to INetFwRule
+                    policy.Rules.Add(rule);
                     return true;
                 }
                 catch (Exception ex)
@@ -257,22 +315,22 @@ class Program
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return;
 
                     var toRemove = new List<string>();
-                    foreach (dynamic r in (dynamic)policy.Rules)
+                    foreach (INetFwRule r in policy.Rules)
                     {
                         try
                         {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
-                                toRemove.Add((string)r.Name);
+                            if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
+                                toRemove.Add(r.Name);
                         }
                         catch { }
                     }
 
                     foreach (var name in toRemove)
-                        ((dynamic)policy.Rules).Remove(name);
+                        policy.Rules.Remove(name);
                 }
                 catch (Exception ex) { LogCrash($"FirewallManager.RemoveBlockRule({ip}): {ex.Message}"); }
             }

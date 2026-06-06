@@ -6,10 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>5.6.0</Version>
-    <AssemblyVersion>5.6.0.0</AssemblyVersion>
-    <FileVersion>5.6.0.0</FileVersion>
-    <DefaultItemExcludes>MyFirewall.Desktop\**;$(DefaultItemExcludes)</DefaultItemExcludes>
+    <Version>5.7.0</Version>
+    <AssemblyVersion>5.7.0.0</AssemblyVersion>
+    <FileVersion>5.7.0.0</FileVersion>
+    <DefaultItemExcludes>MyFirewall.Desktop\**;testcom\**;Test*.cs;$(DefaultItemExcludes)</DefaultItemExcludes>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>

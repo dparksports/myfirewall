@@ -25,25 +25,29 @@ namespace MyFirewall.Desktop.Services
             _logError = logError;
         }
 
-        private dynamic? GetPolicy()
+        private INetFwPolicy2? GetPolicy()
         {
             var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", throwOnError: false);
-            return type is null ? null : Activator.CreateInstance(type);
+            return type is null ? null : (INetFwPolicy2)Activator.CreateInstance(type)!;
         }
 
         /// <summary>
         /// Fix #5: Private non-locking variant used only inside an existing lock scope.
         /// Callers must hold _fwLock before calling this.
         /// </summary>
-        private bool RuleExistsUnsafe(dynamic policy, string ip)
+        private bool RuleExistsUnsafe(INetFwPolicy2 policy, string ip, string processName)
         {
+            string expectedName = $"{FirewallRulePrefix}-{processName}-{ip}";
             try
             {
-                foreach (dynamic r in (dynamic)policy.Rules)
+                foreach (INetFwRule r in policy.Rules)
                 {
                     try
                     {
-                        if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
+                        if (r.Name == expectedName) return true;
+                        
+                        string remoteIp = r.RemoteAddresses;
+                        if (remoteIp != null && r.Name.StartsWith(FirewallRulePrefix) && (remoteIp == ip || remoteIp.StartsWith(ip + "/")))
                             return true;
                     }
                     catch { /* skip rules we can't read */ }
@@ -56,15 +60,15 @@ namespace MyFirewall.Desktop.Services
         /// <summary>
         /// Public rule-existence check (acquires its own lock).
         /// </summary>
-        public bool RuleExists(string ip)
+        public bool RuleExists(string ip, string processName)
         {
             lock (_fwLock)
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return false;
-                    return RuleExistsUnsafe(policy, ip);
+                    return RuleExistsUnsafe(policy, ip, processName);
                 }
                 catch (Exception ex) { _logError($"FirewallService.RuleExists: {ex.Message}"); }
                 return false;
@@ -79,29 +83,25 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) { _logError("FirewallService: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
                     // Fix #5: Check existence inside the lock — no window between check and add.
-                    if (RuleExistsUnsafe(policy, ip)) return true;
+                    if (RuleExistsUnsafe(policy, ip, processName)) return true;
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-
-                    // Fix for AccessViolationException/E_INVALIDARG: Use dynamic for EVERYTHING.
-                    // .NET 8 has a regression where vtable-based COM marshalling for INetFwRule
-                    // causes memory corruption and E_INVALIDARG when adding rules.
-                    dynamic rule = Activator.CreateInstance(ruleType)!;
+                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
                     rule.Name = $"{FirewallRulePrefix}-{processName}-{ip}";
                     rule.Description = $"Auto-blocked by TCP Monitor | application={processName}";
                     rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     rule.RemoteAddresses = ip;
-                    rule.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                     rule.Enabled = true;
                     rule.Profiles = 7; // All profiles
 
-                    ((dynamic)policy.Rules).Add(rule); // No cast to INetFwRule
+                    policy.Rules.Add(rule);
 
                     // Fix #7: Invalidate cache after a successful add.
                     _cachedRuleCount = -1;
@@ -121,22 +121,23 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return;
 
                     var toRemove = new List<string>();
-                    foreach (dynamic r in (dynamic)policy.Rules)
+                    foreach (INetFwRule r in policy.Rules)
                     {
                         try
                         {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
-                                toRemove.Add((string)r.Name);
+                            string remoteIp = r.RemoteAddresses;
+                            if (r.Name.StartsWith(FirewallRulePrefix) && remoteIp != null && (remoteIp == ip || remoteIp.StartsWith(ip + "/")))
+                                toRemove.Add(r.Name);
                         }
                         catch { }
                     }
 
                     foreach (var name in toRemove)
-                        ((dynamic)policy.Rules).Remove(name);
+                        policy.Rules.Remove(name);
 
                     // Fix #7: Invalidate cache after removal.
                     if (toRemove.Count > 0) _cachedRuleCount = -1;
@@ -157,14 +158,14 @@ namespace MyFirewall.Desktop.Services
 
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return 0;
                     int count = 0;
-                    foreach (dynamic r in (dynamic)policy.Rules)
+                    foreach (INetFwRule r in policy.Rules)
                     {
                         try
                         {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix)) count++;
+                            if (r.Name.StartsWith(FirewallRulePrefix)) count++;
                         }
                         catch { }
                     }
@@ -189,14 +190,14 @@ namespace MyFirewall.Desktop.Services
             {
                 try
                 {
-                    dynamic? policy = GetPolicy();
+                    INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return rules;
-                    foreach (dynamic r in (dynamic)policy.Rules)
+                    foreach (INetFwRule r in policy.Rules)
                     {
                         try
                         {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix))
-                                rules.Add(((string)r.Name, (string)r.RemoteAddresses ?? "", (bool)r.Enabled));
+                            if (r.Name.StartsWith(FirewallRulePrefix))
+                                rules.Add((r.Name, r.RemoteAddresses ?? "", r.Enabled));
                         }
                         catch { }
                     }

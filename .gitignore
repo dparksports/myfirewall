@@ -65,3 +65,11 @@ publish/
 release_cli/
 release_desktop/
 *.zip
+
+# Local test files
+TestDesktop.cs
+TestFw.cs
+test_fw.ps1
+test_fw2.ps1
+testcom/
+
