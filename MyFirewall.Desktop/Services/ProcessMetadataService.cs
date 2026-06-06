@@ -5,6 +5,9 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Collections.Generic;
+using System.Linq;
+using MyFirewall.Desktop.Models;
 
 namespace MyFirewall.Desktop.Services
 {
@@ -31,6 +34,84 @@ namespace MyFirewall.Desktop.Services
 
         private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
         private readonly ConcurrentDictionary<int, CacheEntry> _cache = new();
+
+        // ETW Process History Cache
+        private readonly ConcurrentDictionary<int, ProcessHistoryNode> _processHistory = new();
+        private const int MaxHistoryNodes = 50000;
+        
+        public void RegisterProcessStart(int pid, int parentPid, string processName)
+        {
+            if (_processHistory.Count >= MaxHistoryNodes)
+            {
+                // Prune oldest 10%
+                var oldestKeys = _processHistory.OrderBy(x => x.Value.StartTime).Take(MaxHistoryNodes / 10).Select(x => x.Key).ToList();
+                foreach (var key in oldestKeys) _processHistory.TryRemove(key, out _);
+            }
+
+            _processHistory[pid] = new ProcessHistoryNode
+            {
+                PID = pid,
+                ParentPID = parentPid,
+                ProcessName = processName,
+                StartTime = DateTime.Now
+            };
+        }
+
+        public List<ProcessHistoryNode> GetProcessAncestry(int pid)
+        {
+            var ancestry = new List<ProcessHistoryNode>();
+            var visited = new HashSet<int>();
+
+            int currentPid = pid;
+
+            while (currentPid > 0 && visited.Add(currentPid))
+            {
+                if (_processHistory.TryGetValue(currentPid, out var node))
+                {
+                    ancestry.Add(node);
+                    currentPid = node.ParentPID;
+                }
+                else
+                {
+                    // Fallback to active process query if not in ETW history
+                    try
+                    {
+                        var pbi = new PROCESS_BASIC_INFORMATION();
+                        IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, currentPid);
+                        if (hProcess != IntPtr.Zero)
+                        {
+                            int status = NtQueryInformationProcess(hProcess, 0, ref pbi, Marshal.SizeOf(pbi), out _);
+                            CloseHandle(hProcess);
+                            if (status == 0)
+                            {
+                                int parentPid = pbi.InheritedFromUniqueProcessId.ToInt32();
+                                
+                                string pName = "Unknown";
+                                try { pName = Process.GetProcessById(currentPid).ProcessName; } catch { }
+
+                                var fallbackNode = new ProcessHistoryNode
+                                {
+                                    PID = currentPid,
+                                    ParentPID = parentPid,
+                                    ProcessName = pName,
+                                    StartTime = DateTime.MinValue // Unknown start time
+                                };
+                                ancestry.Add(fallbackNode);
+                                currentPid = parentPid;
+                                continue;
+                            }
+                        }
+                    }
+                    catch { }
+
+                    break; // Could not find parent
+                }
+            }
+
+            // Reverse to get root -> child order
+            ancestry.Reverse();
+            return ancestry;
+        }
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);

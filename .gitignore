@@ -60,3 +60,8 @@ crash.log
 blocked.txt
 ignore.txt
 
+# Releases and Published binaries
+publish/
+release_cli/
+release_desktop/
+*.zip

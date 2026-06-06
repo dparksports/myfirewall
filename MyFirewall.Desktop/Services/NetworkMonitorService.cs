@@ -90,11 +90,7 @@ namespace MyFirewall.Desktop.Services
 
                 _session = new TraceEventSession(SessionName) { StopOnDispose = true };
 
-                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP;
-                if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
-                {
-                    keywords |= KernelTraceEventParser.Keywords.Process;
-                }
+                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process;
                 _session.EnableKernelProvider(keywords);
 
                 _session.Source.Kernel.TcpIpSend += data =>
@@ -108,12 +104,17 @@ namespace MyFirewall.Desktop.Services
 
                 _session.Source.Kernel.ProcessStart += data =>
                 {
-                    if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw && data.ProcessID > 0)
+                    if (data.ProcessID > 0)
                     {
                         string imageName = data.ImageFileName;
-                        if (imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase))
+                        _metadataService.RegisterProcessStart(data.ProcessID, data.ParentID, imageName);
+
+                        if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
                         {
-                            Task.Run(() => HandleWebView2Spawned(data.ProcessID));
+                            if (imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Task.Run(() => HandleWebView2Spawned(data.ProcessID));
+                            }
                         }
                     }
                 };
@@ -401,7 +402,8 @@ namespace MyFirewall.Desktop.Services
                 ParentProcessName= meta.ParentProcessName,
                 ExecutablePath   = meta.ExecutablePath,
                 Signature        = meta.Signature,
-                LastModified     = meta.LastModified
+                LastModified     = meta.LastModified,
+                Ancestry         = _metadataService.GetProcessAncestry(pid)
             });
         }
 

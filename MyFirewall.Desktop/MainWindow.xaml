@@ -565,10 +565,33 @@
 
                                 <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>
 
-                                <!-- Parent Process -->
+                                <!-- Process Ancestry -->
                                 <StackPanel Margin="0,8,0,12">
-                                    <TextBlock Text="PARENT PROCESS" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,3"/>
-                                    <TextBlock Text="{Binding SelectedConnection.ParentProcessName}" FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="PROCESS ANCESTRY" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                                    <ItemsControl ItemsSource="{Binding SelectedConnection.Ancestry}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+                                                    <TextBlock Text="↳ " Foreground="{DynamicResource AccentCyan}" FontSize="12" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="{Binding ProcessName}" Foreground="{DynamicResource TextSecondary}" FontSize="11" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding PID, StringFormat=' (PID {0})'}" Foreground="{DynamicResource TextMuted}" FontSize="10" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <!-- Fallback if Ancestry is empty -->
+                                    <TextBlock Text="{Binding SelectedConnection.ParentProcessName}" FontSize="11" Foreground="{DynamicResource TextMuted}" FontStyle="Italic">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedConnection.Ancestry.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                 </StackPanel>
 
                                 <Separator Background="{DynamicResource BorderSubtle}" Margin="0,4"/>

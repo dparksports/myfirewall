@@ -42,6 +42,7 @@ namespace MyFirewall.Desktop.Models
         public string ExecutablePath { get; set; } = "N/A";
         public string Signature { get; set; } = "Unsigned / Unknown";
         public string LastModified { get; set; } = "N/A";
+        public System.Collections.Generic.List<ProcessHistoryNode> Ancestry { get; set; } = new();
 
         public string Upload => FormatBytes(UploadBytes);
         public string Download => FormatBytes(DownloadBytes);
