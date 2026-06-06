@@ -1194,6 +1194,7 @@ class Program
             var syncEnabled = SystemSettingsManager.IsLanguageSyncEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
             var widgetsEnabled = SystemSettingsManager.IsWidgetsEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
             var searchEnabled = SystemSettingsManager.IsSearchHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+            var searchBgBingStatus = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled() ? "[red]Disabled[/]" : "[green]Enabled[/]";
 
             var prompt = new SelectionPrompt<string>()
                 .Title("[bold cyan]System Settings Management[/]\nSelect an option to toggle:")
@@ -1201,6 +1202,7 @@ class Program
                     $"Toggle Language Sync (Current: {syncEnabled})",
                     $"Toggle Windows Widgets (Current: {widgetsEnabled})",
                     $"Toggle SearchHost Box (Current: {searchEnabled})",
+                    $"Toggle SearchHost Background & Bing Search (Current: {searchBgBingStatus})",
                     "Stop SettingSyncHost Process",
                     "Stop Widgets Process",
                     "Stop SearchHost Process",
@@ -1231,6 +1233,14 @@ class Program
                 SystemSettingsManager.SetSearchHostEnabled(newState);
                 AnsiConsole.MarkupLine($"SearchHost Box set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("SearchHost");
+            }
+            else if (selection.StartsWith("Toggle SearchHost Background & Bing Search"))
+            {
+                bool currentlyDisabled = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled();
+                bool newStateDisable = !currentlyDisabled;
+                SystemSettingsManager.SetSearchHostBackgroundAndBingDisabled(newStateDisable);
+                AnsiConsole.MarkupLine($"SearchHost Background & Bing Search suggestions set to {(newStateDisable ? "[red]Disabled[/]" : "[green]Enabled[/]")}.");
+                if (newStateDisable) SystemSettingsManager.StopProcess("SearchHost");
             }
             else if (selection.StartsWith("Stop SettingSyncHost Process"))
             {
@@ -1642,6 +1652,69 @@ static class SystemSettingsManager
             key.SetValue("SearchboxTaskbarMode", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
         }
         catch (Exception ex) { Program.LogCrash($"SetSearchHostEnabled: {ex.Message}"); }
+    }
+
+    public static bool IsSearchHostBackgroundAndBingDisabled()
+    {
+        try
+        {
+            using var bgKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\MicrosoftWindows.Client.CBS_cw5n1h2txyew");
+            bool bgDisabled = false;
+            if (bgKey != null)
+            {
+                var d = bgKey.GetValue("Disabled");
+                var dbu = bgKey.GetValue("DisabledByUser");
+                if (d is int di && di == 1 && dbu is int dbui && dbui == 1)
+                {
+                    bgDisabled = true;
+                }
+            }
+
+            using var expKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Policies\Microsoft\Windows\Explorer");
+            bool bingDisabled = false;
+            if (expKey != null)
+            {
+                var val = expKey.GetValue("DisableSearchBoxSuggestions");
+                if (val is int i && i == 1)
+                {
+                    bingDisabled = true;
+                }
+            }
+
+            return bgDisabled && bingDisabled;
+        }
+        catch { return false; }
+    }
+
+    public static void SetSearchHostBackgroundAndBingDisabled(bool disable)
+    {
+        try
+        {
+            using var bgKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\MicrosoftWindows.Client.CBS_cw5n1h2txyew");
+            bgKey.SetValue("Disabled", disable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            bgKey.SetValue("DisabledByUser", disable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+
+            using var expKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Policies\Microsoft\Windows\Explorer");
+            if (disable)
+            {
+                expKey.SetValue("DisableSearchBoxSuggestions", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            }
+            else
+            {
+                try { expKey.DeleteValue("DisableSearchBoxSuggestions", false); } catch {}
+            }
+
+            using var searchKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Search");
+            if (disable)
+            {
+                searchKey.SetValue("BingSearchEnabled", 0, Microsoft.Win32.RegistryValueKind.DWord);
+            }
+            else
+            {
+                try { searchKey.DeleteValue("BingSearchEnabled", false); } catch {}
+            }
+        }
+        catch (Exception ex) { Program.LogCrash($"SetSearchHostBackgroundAndBingDisabled: {ex.Message}"); }
     }
 
     public static void StopProcess(string processName)
