@@ -6,7 +6,12 @@
 
 ## 📊 System Architecture & Infographics
 
-The following interactive infographic details the high-frequency telemetry pipeline and direct COM enforcement architecture:
+Below is the high-fidelity vector architecture diagram depicting the high-frequency telemetry pipelines and zero-overhead COM blocking engine:
+
+![MyFirewall Architecture Infographic](assets/new_infographic.svg)
+
+<details>
+  <summary>🔍 Click to expand/collapse the interactive Mermaid source diagram</summary>
 
 ```mermaid
 graph TD
@@ -52,6 +57,8 @@ graph TD
     class K,L,K_Grid,L_CLI ui;
     class M,N sys;
 ```
+
+</details>
 
 ---
 
