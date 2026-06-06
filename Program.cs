@@ -246,9 +246,10 @@ class Program
             return type is null ? null : (INetFwPolicy2)Activator.CreateInstance(type)!;
         }
 
-        /// <summary>Returns true if any rule with the given display name already exists.</summary>
-        public static bool RuleExists(string ip)
+        /// <summary>Returns true if a rule for this process and IP already exists.</summary>
+        public static bool RuleExists(string ip, string processName)
         {
+            string expectedName = $"{FirewallRulePrefix}-{processName}-{ip}";
             lock (_fwLock)
             {
                 try
@@ -260,7 +261,7 @@ class Program
                     {
                         try
                         {
-                            if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
+                            if (r.Name == expectedName)
                                 return true;
                         }
                         catch { /* skip rules we can't read */ }
@@ -275,7 +276,7 @@ class Program
         public static bool AddBlockRule(string ip, string processName)
         {
             if (!IsValidIP(ip)) return false;
-            if (RuleExists(ip)) return true; // Fix #3: deduplication
+            if (RuleExists(ip, processName)) return true; // Fix #3: deduplication
 
             lock (_fwLock)
             {
