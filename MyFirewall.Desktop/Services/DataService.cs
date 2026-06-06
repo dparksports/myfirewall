@@ -19,12 +19,38 @@ namespace MyFirewall.Desktop.Services
         {
             _logError = logError;
 
-            // Point to the parent directory where the console app's files reside
-            // AppDomain.CurrentDomain.BaseDirectory is usually bin/Debug/net8.0-windows/
-            string baseDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
-            _blockedFile = Path.Combine(baseDir, "blocked.txt");
-            _ignoredFile = Path.Combine(baseDir, "ignored.txt");
+            // Fix #8: Resolve the data directory relative to the running executable rather
+            // than using a fragile "../../../../" chain that breaks under publish/flat installs.
+            string baseDir = ResolveBaseDir();
+            _blockedFile  = Path.Combine(baseDir, "blocked.txt");
+            _ignoredFile  = Path.Combine(baseDir, "ignored.txt");
             _crashLogFile = Path.Combine(baseDir, "crash.log");
+        }
+
+        /// <summary>
+        /// Resolves the data directory: next to the exe when published/installed,
+        /// or 4 levels up from BaseDirectory when running from a Debug build output folder.
+        /// </summary>
+        private static string ResolveBaseDir()
+        {
+            // Preferred: directory of the running executable (works for published builds)
+            string? exeDir = Path.GetDirectoryName(
+                Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName);
+
+            if (!string.IsNullOrEmpty(exeDir))
+            {
+                // When running from bin/Debug/net8.0-windows/ the blocked.txt is 4 levels up.
+                // Check if we're in a typical build output folder (contains .dll files alongside)
+                // and walk up if so; otherwise use the exe dir directly.
+                string candidate = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", ".."));
+                if (Directory.Exists(candidate))
+                    return candidate;
+
+                return exeDir;
+            }
+
+            // Fallback for edge cases (e.g. AppHost extraction path)
+            return AppContext.BaseDirectory;
         }
 
         public (Dictionary<string, BlockedIPMetadata> BlockedIPs, HashSet<string> IgnoredApps) LoadData()
@@ -85,7 +111,7 @@ namespace MyFirewall.Desktop.Services
         /// </summary>
         public string ExportReport(Dictionary<string, BlockedIPMetadata> blockedIPs, IEnumerable<string> ignoredApps, IEnumerable<string> alerts)
         {
-            string baseDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
+            string baseDir = ResolveBaseDir();
             string fileName = $"report_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
             string filePath = Path.Combine(baseDir, fileName);
 

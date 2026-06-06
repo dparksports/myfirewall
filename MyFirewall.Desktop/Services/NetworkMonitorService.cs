@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -38,6 +39,16 @@ namespace MyFirewall.Desktop.Services
         public Action<AlertEntry>? OnProactiveAlert { get; set; }
         private readonly HashSet<int> _proactiveEvaluatedPids = new();
 
+        public NetworkMonitorService(Action<string> logError, GeoIpService geoIpService)
+        {
+            _logError = logError;
+            _geoIpService = geoIpService;
+        }
+
+        /// <summary>
+        /// Fix #11: Strategy switch runs Stop+Start on a background Task so the UI is never
+        /// blocked by the 500ms ETW session cleanup sleep.
+        /// </summary>
         public void SetMonitoringStrategy(ProcessMonitoringStrategy strategy)
         {
             if (_monitoringStrategy == strategy) return;
@@ -45,15 +56,20 @@ namespace MyFirewall.Desktop.Services
 
             if (IsRunning)
             {
-                Stop();
-                Start();
+                // Run the stop+restart off the UI thread so Thread.Sleep(500) doesn't block WPF.
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        Stop();
+                        Start();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logError($"SetMonitoringStrategy restart: {ex.Message}");
+                    }
+                });
             }
-        }
-
-        public NetworkMonitorService(Action<string> logError, GeoIpService geoIpService)
-        {
-            _logError = logError;
-            _geoIpService = geoIpService;
         }
 
         public void Start()
@@ -72,7 +88,7 @@ namespace MyFirewall.Desktop.Services
                 }
 
                 _session = new TraceEventSession(SessionName) { StopOnDispose = true };
-                
+
                 var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP;
                 if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
                 {
@@ -129,9 +145,15 @@ namespace MyFirewall.Desktop.Services
                 var isSigned = meta.Signature.Contains("Signed");
                 var severity = isSigned ? AlertSeverity.Info : AlertSeverity.Critical;
 
+                string spawnReason = "General Rendering";
+                string parentLower = meta.ParentProcessName.ToLower();
+                if (parentLower.Contains("searchhost")) spawnReason = "Search UI rendering";
+                else if (parentLower.Contains("widgets")) spawnReason = "Widgets content rendering";
+                else if (parentLower.Contains("msedge")) spawnReason = "Edge browser sub-process";
+
                 var alert = new AlertEntry
                 {
-                    Message = $"[Proactive WebView2 Spawned] PID {pid} by {meta.ParentProcessName}. Digital Signature: {meta.Signature}",
+                    Message = $"[Proactive WebView2 Spawned] PID {pid} by {meta.ParentProcessName} (Reason: {spawnReason})\nPath: {meta.ExecutablePath}\nSignature: {meta.Signature}",
                     Severity = severity,
                     Timestamp = DateTime.Now.ToString("HH:mm:ss")
                 };
@@ -164,12 +186,19 @@ namespace MyFirewall.Desktop.Services
             }
         }
 
+        // ─────────────────────────────────────────────────────────────────────────
+        //  P/Invoke: IPv4 TCP table
+        // ─────────────────────────────────────────────────────────────────────────
+
         [DllImport("iphlpapi.dll", SetLastError = true)]
         private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int dwOutBufLen, bool sort, int ipVersion, int tblClass, uint reserved = 0);
 
-        private const int AF_INET = 2;
+        private const int AF_INET  = 2;
+        private const int AF_INET6 = 23;
         private const int TCP_TABLE_OWNER_PID_ALL = 5;
         private const uint TCP_STATE_ESTABLISHED = 5;
+        private const uint TCP_STATE_CLOSE_WAIT  = 8;
+        private const uint TCP_STATE_TIME_WAIT   = 11;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct MIB_TCPROW_OWNER_PID
@@ -179,6 +208,25 @@ namespace MyFirewall.Desktop.Services
             public uint dwLocalPort;
             public uint dwRemoteAddr;
             public uint dwRemotePort;
+            public uint dwOwningPid;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        //  P/Invoke: IPv6 TCP table (Fix #12)
+        // ─────────────────────────────────────────────────────────────────────────
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MIB_TCP6ROW_OWNER_PID
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] ucLocalAddr;
+            public uint dwLocalScopeId;
+            public uint dwLocalPort;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] ucRemoteAddr;
+            public uint dwRemoteScopeId;
+            public uint dwRemotePort;
+            public uint dwState;
             public uint dwOwningPid;
         }
 
@@ -193,14 +241,26 @@ namespace MyFirewall.Desktop.Services
         public List<ConnectionInfo> GetConnections(HashSet<string> ignoredApps, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
         {
             var list = new List<ConnectionInfo>();
+
+            EnumerateIPv4Connections(list, ignoredApps, blockedIPs, blockedProcessNames);
+            EnumerateIPv6Connections(list, ignoredApps, blockedIPs, blockedProcessNames); // Fix #12
+
+            // Fix #10 (partial): prune stale _connectionStartTimes entries after each full scan
+            PruneStaleConnectionTimes(list);
+
+            return list;
+        }
+
+        private void EnumerateIPv4Connections(List<ConnectionInfo> list, HashSet<string> ignoredApps,
+            Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
+        {
             int bufferSize = 0;
             GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL);
             IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
 
             try
             {
-                if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0)
-                    return list;
+                if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0) return;
 
                 int rowCount = Marshal.ReadInt32(ptr);
                 IntPtr rowPtr = ptr + 4;
@@ -212,65 +272,129 @@ namespace MyFirewall.Desktop.Services
                         var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
                         rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
 
-                        if (row.dwState != TCP_STATE_ESTABLISHED) continue;
+                        if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT && row.dwState != TCP_STATE_TIME_WAIT) continue;
 
                         string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
                         if (remoteIP.StartsWith("127.") || remoteIP == "0.0.0.0") continue;
 
-                        int pid = (int)row.dwOwningPid;
-                        string appName = "Unknown";
-                        try
-                        {
-                            appName = Process.GetProcessById(pid).ProcessName;
-                            if (ignoredApps.Contains(appName.ToLower())) continue;
-                        }
-                        catch { continue; }
-
-                        string key = $"{pid}-{remoteIP}";
-                        if (!_connectionStartTimes.ContainsKey(key)) _connectionStartTimes[key] = DateTime.Now;
-
-                        long sent = 0, recv = 0;
-                        lock (_lock)
-                        {
-                            sent = _bytesSent.GetValueOrDefault(pid);
-                            recv = _bytesReceived.GetValueOrDefault(pid);
-                        }
-
-                        bool isBlocked = blockedIPs.ContainsKey(remoteIP) || blockedProcessNames.Contains(appName);
-
                         int remotePort = NetworkToHostPort(row.dwRemotePort);
-                        int localPort = NetworkToHostPort(row.dwLocalPort);
+                        int localPort  = NetworkToHostPort(row.dwLocalPort);
+                        int pid = (int)row.dwOwningPid;
 
-                        // Get geo info with country code
-                        var geoResult = _geoIpService.GetCachedGeoWithCode(remoteIP);
-                        var meta = _metadataService.GetMetadataForPid(pid);
-
-                        list.Add(new ConnectionInfo
-                        {
-                            ApplicationName = appName,
-                            PID = pid,
-                            Destination = remoteIP,
-                            RemotePort = remotePort,
-                            LocalPort = localPort,
-                            Location = geoResult.Display,
-                            CountryCode = geoResult.CountryCode,
-                            Domain = _geoIpService.GetCachedDomain(remoteIP),
-                            Duration = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
-                            UploadBytes = sent,
-                            DownloadBytes = recv,
-                            IsBlocked = isBlocked,
-                            ParentProcessName = meta.ParentProcessName,
-                            ExecutablePath = meta.ExecutablePath,
-                            Signature = meta.Signature,
-                            LastModified = meta.LastModified
-                        });
+                        AddConnectionToList(list, pid, remoteIP, remotePort, localPort, ignoredApps, blockedIPs, blockedProcessNames);
                     }
-                    catch (Exception ex) { _logError($"GetTcpConnections row: {ex.Message}"); }
+                    catch (Exception ex) { _logError($"GetTcpConnections IPv4 row: {ex.Message}"); }
                 }
             }
             finally { Marshal.FreeHGlobal(ptr); }
+        }
 
-            return list;
+        /// <summary>
+        /// Fix #12: Enumerate IPv6 TCP connections to capture modern app traffic (Teams, Edge, etc.)
+        /// </summary>
+        private void EnumerateIPv6Connections(List<ConnectionInfo> list, HashSet<string> ignoredApps,
+            Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
+        {
+            int bufferSize = 0;
+            GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET6, TCP_TABLE_OWNER_PID_ALL);
+            if (bufferSize <= 0) return;
+
+            IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
+            try
+            {
+                if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET6, TCP_TABLE_OWNER_PID_ALL) != 0) return;
+
+                int rowCount = Marshal.ReadInt32(ptr);
+                IntPtr rowPtr = ptr + 4;
+
+                for (int i = 0; i < rowCount; i++)
+                {
+                    try
+                    {
+                        var row = Marshal.PtrToStructure<MIB_TCP6ROW_OWNER_PID>(rowPtr);
+                        rowPtr += Marshal.SizeOf<MIB_TCP6ROW_OWNER_PID>();
+
+                        if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT && row.dwState != TCP_STATE_TIME_WAIT) continue;
+
+                        string remoteIP = new IPAddress(row.ucRemoteAddr).ToString();
+                        // Skip loopback and unspecified
+                        if (remoteIP == "::1" || remoteIP == "::" || remoteIP.StartsWith("fe80", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        int remotePort = NetworkToHostPort(row.dwRemotePort);
+                        int localPort  = NetworkToHostPort(row.dwLocalPort);
+                        int pid = (int)row.dwOwningPid;
+
+                        AddConnectionToList(list, pid, remoteIP, remotePort, localPort, ignoredApps, blockedIPs, blockedProcessNames);
+                    }
+                    catch (Exception ex) { _logError($"GetTcpConnections IPv6 row: {ex.Message}"); }
+                }
+            }
+            finally { Marshal.FreeHGlobal(ptr); }
+        }
+
+        private void AddConnectionToList(List<ConnectionInfo> list, int pid, string remoteIP,
+            int remotePort, int localPort, HashSet<string> ignoredApps,
+            Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
+        {
+            string appName = "Unknown";
+            try
+            {
+                appName = Process.GetProcessById(pid).ProcessName;
+                if (ignoredApps.Contains(appName.ToLower())) return;
+            }
+            catch { return; }
+
+            string key = $"{pid}-{remoteIP}:{remotePort}-{localPort}";
+            if (!_connectionStartTimes.ContainsKey(key)) _connectionStartTimes[key] = DateTime.Now;
+
+            long sent = 0, recv = 0;
+            lock (_lock)
+            {
+                sent = _bytesSent.GetValueOrDefault(pid);
+                recv = _bytesReceived.GetValueOrDefault(pid);
+            }
+
+            bool isBlocked = blockedIPs.ContainsKey(remoteIP) || blockedProcessNames.Contains(appName);
+
+            var geoResult = _geoIpService.GetCachedGeoWithCode(remoteIP);
+            var meta = _metadataService.GetMetadataForPid(pid);
+
+            list.Add(new ConnectionInfo
+            {
+                ApplicationName  = appName,
+                PID              = pid,
+                Destination      = remoteIP,
+                RemotePort       = remotePort,
+                LocalPort        = localPort,
+                Location         = geoResult.Display,
+                CountryCode      = geoResult.CountryCode,
+                Domain           = _geoIpService.GetCachedDomain(remoteIP),
+                Duration         = (DateTime.Now - _connectionStartTimes[key]).ToString(@"hh\:mm\:ss"),
+                UploadBytes      = sent,
+                DownloadBytes    = recv,
+                IsBlocked        = isBlocked,
+                ParentProcessName= meta.ParentProcessName,
+                ExecutablePath   = meta.ExecutablePath,
+                Signature        = meta.Signature,
+                LastModified     = meta.LastModified
+            });
+        }
+
+        /// <summary>
+        /// Fix #10 (prune): Remove _connectionStartTimes entries for connections that are
+        /// no longer active, preventing unbounded dictionary growth.
+        /// </summary>
+        private void PruneStaleConnectionTimes(List<ConnectionInfo> activeConnections)
+        {
+            var activeKeys = new HashSet<string>(activeConnections.Select(c => c.ConnectionKey));
+
+            // Build the set of keys present in _connectionStartTimes but not in active connections
+            var staleKeys = _connectionStartTimes.Keys
+                .Where(k => !activeKeys.Contains(k))
+                .ToList();
+
+            foreach (var key in staleKeys)
+                _connectionStartTimes.Remove(key);
         }
 
         public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
@@ -293,7 +417,7 @@ namespace MyFirewall.Desktop.Services
                     blockedIPs[conn.Destination] = new BlockedIPMetadata { Application = conn.ApplicationName, Timestamp = DateTime.Now };
                     alerts.Add(new AlertEntry
                     {
-                        Message = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
+                        Message  = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
                         Severity = AlertSeverity.Warning
                     });
                 }

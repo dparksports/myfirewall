@@ -120,6 +120,8 @@ class Program
     private const int AF_INET                = 2;
     private const int TCP_TABLE_OWNER_PID_ALL = 5;
     private const uint TCP_STATE_ESTABLISHED  = 5;
+    private const uint TCP_STATE_CLOSE_WAIT   = 8;
+    private const uint TCP_STATE_TIME_WAIT    = 11;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MIB_TCPROW_OWNER_PID
@@ -477,8 +479,14 @@ class Program
                     }
                 }
 
+                string spawnReason = "General Rendering";
+                string parentLower = parentProcessName.ToLower();
+                if (parentLower.Contains("searchhost")) spawnReason = "Search UI rendering";
+                else if (parentLower.Contains("widgets")) spawnReason = "Widgets content rendering";
+                else if (parentLower.Contains("msedge")) spawnReason = "Edge browser sub-process";
+
                 string color = signature.Contains("Signed") ? "green" : "red";
-                OnProactiveAlert?.Invoke($"PROACTIVE: WebView2 Spawned PID {pid} by {parentProcessName}. Signature: [{color}]{signature}[/]");
+                OnProactiveAlert?.Invoke($"PROACTIVE: WebView2 Spawned PID {pid} by {parentProcessName} (Reason: {spawnReason}).\nPath: {executablePath}\nSignature: [{color}]{signature}[/]");
             }
             catch (Exception ex)
             {
@@ -618,7 +626,7 @@ class Program
 
         var table = new Table().Border(TableBorder.Rounded).Expand();
         table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | T Toggle Strategy | L Lists | H Help[/]");
+        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | S System Settings | T Toggle Strategy | L Lists | H Help[/]");
 
         table.AddColumn("#");
         table.AddColumn("Process");
@@ -721,6 +729,7 @@ class Program
             case ConsoleKey.I: Console.Clear(); IgnoreProcessInteractive(); break;
             case ConsoleKey.B: Console.Clear(); ManageBlockedIPsInteractive(); break;
             case ConsoleKey.P: Console.Clear(); ShowProcessDetailsInteractive(); break;
+            case ConsoleKey.S: Console.Clear(); ManageSystemSettingsInteractive(); break;
             case ConsoleKey.T:
                 if (_etwTracker != null)
                 {
@@ -762,6 +771,7 @@ class Program
             $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
             $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
             $"  [cyan]P[/]       Process Intelligence / Details (interactive)\n" +
+            $"  [cyan]S[/]       System Settings (Language sync, Widgets, Search) (interactive)\n" +
             $"  [cyan]T[/]       Toggle Threat Intel Strategy (runtime)\n" +
             $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
             $"  [cyan]H / F1[/]  Show this help screen\n\n" +
@@ -1112,6 +1122,69 @@ class Program
         }
     }
 
+    static void ManageSystemSettingsInteractive()
+    {
+        while (true)
+        {
+            AnsiConsole.Clear();
+            var syncEnabled = SystemSettingsManager.IsLanguageSyncEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+            var widgetsEnabled = SystemSettingsManager.IsWidgetsEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+            var searchEnabled = SystemSettingsManager.IsSearchHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+
+            var prompt = new SelectionPrompt<string>()
+                .Title("[bold cyan]System Settings Management[/]\nSelect an option to toggle:")
+                .AddChoices(
+                    $"Toggle Language Sync (Current: {syncEnabled})",
+                    $"Toggle Windows Widgets (Current: {widgetsEnabled})",
+                    $"Toggle SearchHost Box (Current: {searchEnabled})",
+                    "Stop SettingSyncHost Process",
+                    "Stop Widgets Process",
+                    "Stop SearchHost Process",
+                    "Back to Monitor"
+                );
+
+            var selection = AnsiConsole.Prompt(prompt);
+
+            if (selection == "Back to Monitor") break;
+
+            if (selection.StartsWith("Toggle Language Sync"))
+            {
+                bool newState = !SystemSettingsManager.IsLanguageSyncEnabled();
+                SystemSettingsManager.SetLanguageSyncEnabled(newState);
+                AnsiConsole.MarkupLine($"Language Sync set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+                if (!newState) SystemSettingsManager.StopProcess("SettingSyncHost");
+            }
+            else if (selection.StartsWith("Toggle Windows Widgets"))
+            {
+                bool newState = !SystemSettingsManager.IsWidgetsEnabled();
+                SystemSettingsManager.SetWidgetsEnabled(newState);
+                AnsiConsole.MarkupLine($"Widgets set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+                if (!newState) SystemSettingsManager.StopProcess("Widgets");
+            }
+            else if (selection.StartsWith("Toggle SearchHost Box"))
+            {
+                bool newState = !SystemSettingsManager.IsSearchHostEnabled();
+                SystemSettingsManager.SetSearchHostEnabled(newState);
+                AnsiConsole.MarkupLine($"SearchHost Box set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+                if (!newState) SystemSettingsManager.StopProcess("SearchHost");
+            }
+            else if (selection.StartsWith("Stop SettingSyncHost Process"))
+            {
+                SystemSettingsManager.StopProcess("SettingSyncHost");
+            }
+            else if (selection.StartsWith("Stop Widgets Process"))
+            {
+                SystemSettingsManager.StopProcess("Widgets");
+            }
+            else if (selection.StartsWith("Stop SearchHost Process"))
+            {
+                SystemSettingsManager.StopProcess("SearchHost");
+            }
+
+            Thread.Sleep(1500);
+        }
+    }
+
     #endregion
 
     #region NetworkHelpers
@@ -1138,7 +1211,7 @@ class Program
                     var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
                     rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
 
-                    if (row.dwState != TCP_STATE_ESTABLISHED) continue;
+                    if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT && row.dwState != TCP_STATE_TIME_WAIT) continue;
 
                     string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
                     if (remoteIP.StartsWith("127.") || remoteIP == "0.0.0.0") continue;
@@ -1339,7 +1412,7 @@ class Program
     static bool IsValidIP(string ip) =>
         !string.IsNullOrWhiteSpace(ip) && IPAddress.TryParse(ip, out _);
 
-    static void LogCrash(string message) =>
+    internal static void LogCrash(string message) =>
         File.AppendAllText(CrashLogFile, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
 
     static bool IsAdministrator() =>
@@ -1381,4 +1454,119 @@ class TcpConnectionInfo
     public string Duration      { get; set; } = "";
     public string TotalSent     { get; set; } = "";
     public string TotalReceived { get; set; } = "";
+}
+
+static class SystemSettingsManager
+{
+    public static bool IsLanguageSyncEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Policies\Microsoft\Windows\SettingSync");
+            if (key != null)
+            {
+                var val = key.GetValue("DisableLanguageSettingSync");
+                if (val is int i && i == 1) return false;
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void SetLanguageSyncEnabled(bool enable)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Policies\Microsoft\Windows\SettingSync");
+            key.SetValue("DisableLanguageSettingSync", enable ? 0 : 1, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Program.LogCrash($"SetLanguageSyncEnabled: {ex.Message}"); }
+    }
+
+    public static bool IsWidgetsEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Dsh");
+            if (key != null)
+            {
+                var val = key.GetValue("AllowNewsAndInterests");
+                if (val is int i && i == 0) return false;
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void SetWidgetsEnabled(bool enable)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\Microsoft\Dsh");
+            key.SetValue("AllowNewsAndInterests", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            
+            if (!enable)
+            {
+                // Run powershell to remove web experience package
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-Command \"Get-AppxPackage *WebExperience* | Remove-AppxPackage\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                Process.Start(psi);
+            }
+        }
+        catch (Exception ex) { Program.LogCrash($"SetWidgetsEnabled: {ex.Message}"); }
+    }
+
+    public static bool IsSearchHostEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Search");
+            if (key != null)
+            {
+                var val = key.GetValue("SearchboxTaskbarMode");
+                if (val is int i && i == 0) return false;
+            }
+            return true; // Default is true (enabled)
+        }
+        catch { return true; }
+    }
+
+    public static void SetSearchHostEnabled(bool enable)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Search");
+            key.SetValue("SearchboxTaskbarMode", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Program.LogCrash($"SetSearchHostEnabled: {ex.Message}"); }
+    }
+
+    public static void StopProcess(string processName)
+    {
+        try
+        {
+            var processes = Process.GetProcessesByName(processName);
+            foreach (var p in processes)
+            {
+                p.Kill(entireProcessTree: true);
+            }
+            if (processes.Length > 0)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Stopped {processName} process.[/]");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine($"[grey]{processName} is not running.[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Failed to stop {processName}: {ex.Message}[/]");
+        }
+    }
 }

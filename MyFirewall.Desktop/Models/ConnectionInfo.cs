@@ -1,11 +1,21 @@
 using System;
-using System.Globalization;
 using System.Windows.Media;
 
 namespace MyFirewall.Desktop.Models
 {
     public class ConnectionInfo
     {
+        private static readonly SolidColorBrush BlockedBrush;
+        private static readonly SolidColorBrush AllowedBrush;
+
+        static ConnectionInfo()
+        {
+            BlockedBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F85149"));
+            BlockedBrush.Freeze(); // Thread-safe: frozen brushes can be shared across threads
+            AllowedBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3FB950"));
+            AllowedBrush.Freeze();
+        }
+
         public string ApplicationName { get; set; } = "";
         public int PID { get; set; }
         public string Destination { get; set; } = "";
@@ -33,9 +43,7 @@ namespace MyFirewall.Desktop.Models
         /// <summary>
         /// Returns a SolidColorBrush for proper WPF binding instead of a string.
         /// </summary>
-        public SolidColorBrush StatusBrush => IsBlocked
-            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F85149"))
-            : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3FB950"));
+        public SolidColorBrush StatusBrush => IsBlocked ? BlockedBrush : AllowedBrush;
 
         // Keep the string version for backward compat with any existing bindings
         public string StatusColor => IsBlocked ? "#F85149" : "#3FB950";
@@ -61,9 +69,9 @@ namespace MyFirewall.Desktop.Models
         }
 
         /// <summary>
-        /// Unique key for smart-diff comparison (PID + IP identifies a unique connection).
+        /// Unique key for smart-diff comparison (PID + IP + Ports identifies a unique connection).
         /// </summary>
-        public string ConnectionKey => $"{PID}-{Destination}";
+        public string ConnectionKey => $"{PID}-{Destination}-{LocalPort}-{RemotePort}";
 
         private static string FormatBytes(long bytes)
         {

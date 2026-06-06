@@ -3,15 +3,22 @@ using System.Collections.Generic;
 
 namespace MyFirewall.Desktop.Services
 {
+    /// <summary>
+    /// Manages Windows Firewall rules via the HNetCfg.FwPolicy2 COM API.
+    /// Uses dynamic dispatch for all COM calls to avoid .NET 8 vtable marshalling regressions.
+    /// Fix #5: RuleExists check is inlined inside AddBlockRule's lock to prevent TOCTOU races.
+    /// Fix #7: FirewallRuleCount is cached and only re-queried when rules change.
+    /// Fix #A: Removed duplicate constant definitions; use ComInterop.cs enums throughout.
+    /// </summary>
     public class FirewallService
     {
         private const string FirewallRulePrefix = "TCP-Monitor-Block";
-        private const int NET_FW_ACTION_BLOCK = 0;
-        private const int NET_FW_RULE_DIR_OUT = 2;
-        private const int NET_FW_IP_PROTOCOL_ANY = 256;
 
         private readonly object _fwLock = new();
         private readonly Action<string> _logError;
+
+        // Fix #7: Cached rule count — avoids enumerating all WFP rules every 2 seconds.
+        private int _cachedRuleCount = -1;
 
         public FirewallService(Action<string> logError)
         {
@@ -24,6 +31,31 @@ namespace MyFirewall.Desktop.Services
             return type is null ? null : Activator.CreateInstance(type);
         }
 
+        /// <summary>
+        /// Fix #5: Private non-locking variant used only inside an existing lock scope.
+        /// Callers must hold _fwLock before calling this.
+        /// </summary>
+        private bool RuleExistsUnsafe(dynamic policy, string ip)
+        {
+            try
+            {
+                foreach (dynamic r in (dynamic)policy.Rules)
+                {
+                    try
+                    {
+                        if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
+                            return true;
+                    }
+                    catch { /* skip rules we can't read */ }
+                }
+            }
+            catch (Exception ex) { _logError($"FirewallService.RuleExistsUnsafe: {ex.Message}"); }
+            return false;
+        }
+
+        /// <summary>
+        /// Public rule-existence check (acquires its own lock).
+        /// </summary>
         public bool RuleExists(string ip)
         {
             lock (_fwLock)
@@ -32,17 +64,7 @@ namespace MyFirewall.Desktop.Services
                 {
                     dynamic? policy = GetPolicy();
                     if (policy is null) return false;
-                    
-                    // Use dynamic to avoid vtable-based COM marshalling which causes memory corruption
-                    foreach (dynamic r in (dynamic)policy.Rules)
-                    {
-                        try
-                        {
-                            if (((string)r.Name).StartsWith(FirewallRulePrefix) && (string)r.RemoteAddresses == ip)
-                                return true;
-                        }
-                        catch { /* skip rules we can't read */ }
-                    }
+                    return RuleExistsUnsafe(policy, ip);
                 }
                 catch (Exception ex) { _logError($"FirewallService.RuleExists: {ex.Message}"); }
                 return false;
@@ -52,7 +74,6 @@ namespace MyFirewall.Desktop.Services
         public bool AddBlockRule(string ip, string processName)
         {
             if (string.IsNullOrWhiteSpace(ip)) return false;
-            if (RuleExists(ip)) return true;
 
             lock (_fwLock)
             {
@@ -61,8 +82,11 @@ namespace MyFirewall.Desktop.Services
                     dynamic? policy = GetPolicy();
                     if (policy is null) { _logError("FirewallService: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
+                    // Fix #5: Check existence inside the lock — no window between check and add.
+                    if (RuleExistsUnsafe(policy, ip)) return true;
+
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    
+
                     // Fix for AccessViolationException/E_INVALIDARG: Use dynamic for EVERYTHING.
                     // .NET 8 has a regression where vtable-based COM marshalling for INetFwRule
                     // causes memory corruption and E_INVALIDARG when adding rules.
@@ -78,6 +102,9 @@ namespace MyFirewall.Desktop.Services
                     rule.Profiles = 7; // All profiles
 
                     ((dynamic)policy.Rules).Add(rule); // No cast to INetFwRule
+
+                    // Fix #7: Invalidate cache after a successful add.
+                    _cachedRuleCount = -1;
                     return true;
                 }
                 catch (Exception ex)
@@ -110,18 +137,24 @@ namespace MyFirewall.Desktop.Services
 
                     foreach (var name in toRemove)
                         ((dynamic)policy.Rules).Remove(name);
+
+                    // Fix #7: Invalidate cache after removal.
+                    if (toRemove.Count > 0) _cachedRuleCount = -1;
                 }
                 catch (Exception ex) { _logError($"FirewallService.RemoveBlockRule({ip}): {ex.Message}"); }
             }
         }
 
         /// <summary>
-        /// Returns the number of TCP-Monitor firewall rules currently active.
+        /// Fix #7: Returns a cached count of TCP-Monitor firewall rules.
+        /// Only enumerates when invalidated by Add/Remove (avoids expensive COM enumeration every 2s).
         /// </summary>
         public int GetRuleCount()
         {
             lock (_fwLock)
             {
+                if (_cachedRuleCount >= 0) return _cachedRuleCount;
+
                 try
                 {
                     dynamic? policy = GetPolicy();
@@ -135,6 +168,7 @@ namespace MyFirewall.Desktop.Services
                         }
                         catch { }
                     }
+                    _cachedRuleCount = count;
                     return count;
                 }
                 catch (Exception ex)

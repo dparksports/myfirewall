@@ -19,7 +19,18 @@ namespace MyFirewall.Desktop.Services
 
     public class ProcessMetadataService
     {
-        private readonly ConcurrentDictionary<int, ProcessMetadata> _cache = new();
+        // Fix #9: TTL-based cache eviction (60s) — Windows recycles PIDs, so a long-lived
+        // cache could associate old metadata with a new process that reuses the same PID.
+        private readonly struct CacheEntry
+        {
+            public readonly ProcessMetadata Metadata;
+            public readonly DateTime Expires;
+            public CacheEntry(ProcessMetadata m, DateTime expires) { Metadata = m; Expires = expires; }
+            public bool IsValid => DateTime.Now < Expires;
+        }
+
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+        private readonly ConcurrentDictionary<int, CacheEntry> _cache = new();
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
@@ -56,11 +67,13 @@ namespace MyFirewall.Desktop.Services
         {
             if (pid <= 0) return new ProcessMetadata();
 
-            if (_cache.TryGetValue(pid, out var cached))
-                return cached;
+            // Return cached entry if still within TTL
+            if (_cache.TryGetValue(pid, out var entry) && entry.IsValid)
+                return entry.Metadata;
 
+            // Expired or missing — resolve fresh and store with new TTL
             var metadata = ResolveMetadata(pid);
-            _cache[pid] = metadata;
+            _cache[pid] = new CacheEntry(metadata, DateTime.Now.Add(CacheTtl));
             return metadata;
         }
 

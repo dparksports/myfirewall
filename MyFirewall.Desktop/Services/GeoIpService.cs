@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -8,22 +8,39 @@ using System.Threading.Tasks;
 
 namespace MyFirewall.Desktop.Services
 {
-    public class GeoIpService
+    /// <summary>
+    /// Provides geo-IP and reverse-DNS lookups with async caching.
+    /// Fix #4: Uses ConcurrentDictionary so reads from the UI timer and writes from
+    ///         background Tasks don't race each other.
+    /// Fix #6: HttpClient has a 5-second timeout so a slow/absent ip-api.com never
+    ///         leaks threadpool threads indefinitely.
+    /// Fix #15: Implements IDisposable so HttpClient is properly cleaned up on shutdown.
+    /// </summary>
+    public class GeoIpService : IDisposable
     {
         private const string GeoApiBase = "http://ip-api.com/json/";
         private const int GeoMaxRetries = 3;
-        
-        private readonly Dictionary<string, string> _domainCache = new();
-        private readonly Dictionary<string, (string Display, string CountryCode)> _geoCache = new();
+
+        // Fix #4: ConcurrentDictionary — safe for concurrent reads/writes from multiple threads.
+        private readonly ConcurrentDictionary<string, string> _domainCache = new();
+        private readonly ConcurrentDictionary<string, (string Display, string CountryCode)> _geoCache = new();
+
         private readonly SemaphoreSlim _geoSemaphore = new(1, 1);
         private DateTime _lastGeoCall = DateTime.MinValue;
         private readonly TimeSpan _geoApiThrottle = TimeSpan.FromSeconds(1.5);
-        private readonly HttpClient _http = new();
+
+        // Fix #6: 5-second timeout — prevents hung tasks when ip-api.com is unreachable.
+        private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
+
+        private bool _disposed;
 
         public string GetCachedDomain(string ip)
         {
             if (_domainCache.TryGetValue(ip, out var domain)) return domain;
-            _domainCache[ip] = "...";
+
+            // Reserve the slot immediately so concurrent calls don't spin up duplicate DNS lookups.
+            if (!_domainCache.TryAdd(ip, "...")) return _domainCache.GetValueOrDefault(ip, "...");
+
             Task.Run(() =>
             {
                 try { _domainCache[ip] = Dns.GetHostEntry(ip).HostName; }
@@ -35,10 +52,7 @@ namespace MyFirewall.Desktop.Services
         /// <summary>
         /// Returns cached geo display string (backward compatible).
         /// </summary>
-        public string GetCachedGeo(string ip)
-        {
-            return GetCachedGeoWithCode(ip).Display;
-        }
+        public string GetCachedGeo(string ip) => GetCachedGeoWithCode(ip).Display;
 
         /// <summary>
         /// Returns cached geo info including the country code for flag emoji rendering.
@@ -46,7 +60,10 @@ namespace MyFirewall.Desktop.Services
         public (string Display, string CountryCode) GetCachedGeoWithCode(string ip)
         {
             if (_geoCache.TryGetValue(ip, out var geo)) return geo;
-            _geoCache[ip] = ("...", "");
+
+            // Reserve the slot; only the first caller spawns the lookup Task.
+            if (!_geoCache.TryAdd(ip, ("...", ""))) return _geoCache.GetValueOrDefault(ip, ("...", ""));
+
             Task.Run(async () => { _geoCache[ip] = await GeoIpLookupAsync(ip); });
             return ("...", "");
         }
@@ -81,6 +98,7 @@ namespace MyFirewall.Desktop.Services
                         string org = root.TryGetProperty("org", out var o) ? o.GetString() ?? "" : "";
                         string code = root.TryGetProperty("countryCode", out var c) ? c.GetString() ?? "" : "";
 
+                        // Strip "AS12345 " ASN prefix from org string for cleaner display
                         if (org.Length > 3 && org[0] == 'A' && org[1] == 'S')
                         {
                             int space = org.IndexOf(' ');
@@ -89,6 +107,12 @@ namespace MyFirewall.Desktop.Services
 
                         string display = string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
                         return (display, code);
+                    }
+                    catch (TaskCanceledException) // Timeout hit
+                    {
+                        if (attempt == GeoMaxRetries - 1) return ("N/A", "");
+                        await Task.Delay(delay);
+                        delay *= 2;
                     }
                     catch
                     {
@@ -100,6 +124,16 @@ namespace MyFirewall.Desktop.Services
                 return ("N/A", "");
             }
             finally { _geoSemaphore.Release(); }
+        }
+
+        // Fix #15: Dispose HttpClient to release socket handles.
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _http.Dispose();
+            _geoSemaphore.Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 }

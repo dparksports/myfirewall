@@ -353,6 +353,8 @@
                         <RowDefinition Height="8"/>
                         <RowDefinition Height="1*"/>
                         <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto" MaxHeight="200"/>
                     </Grid.RowDefinitions>
 
@@ -435,8 +437,29 @@
                         </Grid>
                     </Border>
 
-                    <!-- Recent Alerts Panel -->
+                    <!-- System Controls Panel -->
                     <Border Grid.Row="4" Style="{StaticResource CardStyle}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <TextBlock Text="⚙" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}"/>
+                                <TextBlock Text="System Controls" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1">
+                                <CheckBox Content="Language Sync" IsChecked="{Binding IsLanguageSyncEnabled}" Margin="0,4"/>
+                                <CheckBox Content="Windows Widgets" IsChecked="{Binding IsWidgetsEnabled}" Margin="0,4"/>
+                                <CheckBox Content="SearchHost Box" IsChecked="{Binding IsSearchHostEnabled}" Margin="0,4"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Recent Alerts Panel -->
+                    <Border Grid.Row="6" Style="{StaticResource CardStyle}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>

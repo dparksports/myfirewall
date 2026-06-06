@@ -12,40 +12,75 @@ namespace MyFirewall.Desktop.Models
 
     public class AlertEntry
     {
+        // Fix #E: Static frozen brushes — avoid per-access allocation on every UI refresh.
+        private static readonly SolidColorBrush _infoColor;
+        private static readonly SolidColorBrush _warningColor;
+        private static readonly SolidColorBrush _criticalColor;
+        private static readonly SolidColorBrush _defaultColor;
+        private static readonly SolidColorBrush _infoBg;
+        private static readonly SolidColorBrush _warningBg;
+        private static readonly SolidColorBrush _criticalBg;
+        private static readonly SolidColorBrush _defaultBg;
+        private static readonly SolidColorBrush _infoBorder;
+        private static readonly SolidColorBrush _warningBorder;
+        private static readonly SolidColorBrush _criticalBorder;
+        private static readonly SolidColorBrush _defaultBorder;
+
+        static AlertEntry()
+        {
+            static SolidColorBrush Make(string hex) {
+                var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+                b.Freeze();
+                return b;
+            }
+            _infoColor     = Make("#58A6FF");
+            _warningColor  = Make("#D29922");
+            _criticalColor = Make("#F85149");
+            _defaultColor  = Make("#8B949E");
+            _infoBg        = Make("#0D2137");
+            _warningBg     = Make("#2A2316");
+            _criticalBg    = Make("#2A1616");
+            _defaultBg     = Make("#161B22");
+            _infoBorder    = Make("#1F4068");
+            _warningBorder = Make("#5C4B1F");
+            _criticalBorder= Make("#5C1F1F");
+            _defaultBorder = Make("#30363D");
+        }
+
         public string Message { get; set; } = "";
         public string Timestamp { get; set; } = DateTime.Now.ToString("HH:mm:ss");
         public AlertSeverity Severity { get; set; } = AlertSeverity.Warning;
 
         public SolidColorBrush AlertColor => Severity switch
         {
-            AlertSeverity.Info => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#58A6FF")),
-            AlertSeverity.Warning => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#D29922")),
-            AlertSeverity.Critical => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F85149")),
-            _ => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8B949E"))
+            AlertSeverity.Info     => _infoColor,
+            AlertSeverity.Warning  => _warningColor,
+            AlertSeverity.Critical => _criticalColor,
+            _                      => _defaultColor
         };
 
         public string AlertIcon => Severity switch
         {
-            AlertSeverity.Info => "ℹ",
-            AlertSeverity.Warning => "⚠",
+            AlertSeverity.Info     => "ℹ",
+            AlertSeverity.Warning  => "⚠",
             AlertSeverity.Critical => "🛑",
-            _ => "•"
+            _                      => "•"
         };
 
         public SolidColorBrush AlertBgColor => Severity switch
         {
-            AlertSeverity.Info => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0D2137")),
-            AlertSeverity.Warning => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2A2316")),
-            AlertSeverity.Critical => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2A1616")),
-            _ => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#161B22"))
+            AlertSeverity.Info     => _infoBg,
+            AlertSeverity.Warning  => _warningBg,
+            AlertSeverity.Critical => _criticalBg,
+            _                      => _defaultBg
         };
 
         public SolidColorBrush AlertBorderColor => Severity switch
         {
-            AlertSeverity.Info => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1F4068")),
-            AlertSeverity.Warning => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5C4B1F")),
-            AlertSeverity.Critical => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5C1F1F")),
-            _ => new SolidColorBrush((Color)ColorConverter.ConvertFromString("#30363D"))
+            AlertSeverity.Info     => _infoBorder,
+            AlertSeverity.Warning  => _warningBorder,
+            AlertSeverity.Critical => _criticalBorder,
+            _                      => _defaultBorder
         };
     }
 
@@ -68,3 +103,4 @@ namespace MyFirewall.Desktop.Models
         public string Application { get; set; } = "";
     }
 }
+

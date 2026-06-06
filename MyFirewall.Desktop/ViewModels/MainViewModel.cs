@@ -20,9 +20,10 @@ namespace MyFirewall.Desktop.ViewModels
         private readonly NetworkMonitorService _networkMonitor;
         private readonly FirewallService _firewallService;
         private readonly DataService _dataService;
+        private readonly GeoIpService _geoIpService;
+        private readonly SystemSettingsService _systemSettingsService;
         private readonly DispatcherTimer _timer;
         private readonly DateTime _startTime = DateTime.Now;
-        private int _pruneCounter;
 
         private Dictionary<string, BlockedIPMetadata> _blockedIPsDict = new();
         private HashSet<string> _ignoredAppsSet = new(StringComparer.OrdinalIgnoreCase);
@@ -30,6 +31,10 @@ namespace MyFirewall.Desktop.ViewModels
 
         // Smart-diff: keyed by ConnectionKey for in-place updates
         private readonly Dictionary<string, ConnectionInfo> _connectionMap = new();
+
+        // Fix #10: Cache the last OS-queried connection list so that SearchFilter changes
+        // apply a client-side filter without triggering expensive OS calls.
+        private List<ConnectionInfo> _latestConnections = new();
 
         public ObservableCollection<ConnectionInfo> Connections { get; } = new();
         public ObservableCollection<BlockedIPEntry> BlockedIPs { get; } = new();
@@ -129,14 +134,51 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 if (SetProperty(ref _searchFilter, value))
                 {
-                    // Force a refresh when search text changes
-                    Timer_Tick(null, EventArgs.Empty);
+                    // Fix #10: Apply filter client-side on the cached connection list —
+                    // do NOT trigger a full OS query just because the user typed a character.
+                    ApplyFilterAndUpdate(_latestConnections);
                 }
             }
         }
 
         private string _statusMessage = "Initializing...";
         public string StatusMessage { get => _statusMessage; set => SetProperty(ref _statusMessage, value); }
+
+        public bool IsLanguageSyncEnabled
+        {
+            get => _systemSettingsService.IsLanguageSyncEnabled();
+            set
+            {
+                _systemSettingsService.SetLanguageSyncEnabled(value);
+                if (!value) _systemSettingsService.StopProcess("SettingSyncHost");
+                OnPropertyChanged(nameof(IsLanguageSyncEnabled));
+                AddAlert($"Language Sync {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
+            }
+        }
+
+        public bool IsWidgetsEnabled
+        {
+            get => _systemSettingsService.IsWidgetsEnabled();
+            set
+            {
+                _systemSettingsService.SetWidgetsEnabled(value);
+                if (!value) _systemSettingsService.StopProcess("Widgets");
+                OnPropertyChanged(nameof(IsWidgetsEnabled));
+                AddAlert($"Windows Widgets {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
+            }
+        }
+
+        public bool IsSearchHostEnabled
+        {
+            get => _systemSettingsService.IsSearchHostEnabled();
+            set
+            {
+                _systemSettingsService.SetSearchHostEnabled(value);
+                if (!value) _systemSettingsService.StopProcess("SearchHost");
+                OnPropertyChanged(nameof(IsSearchHostEnabled));
+                AddAlert($"SearchHost Box {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
+            }
+        }
 
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
@@ -151,16 +193,27 @@ namespace MyFirewall.Desktop.ViewModels
 
         public MainViewModel()
         {
-            string logDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
+            // Fix #8: Use DataService.ResolveBaseDir() indirectly — the DataService now
+            // computes the correct path. Crash log uses the same resolved directory.
+            string? exeDir = Path.GetDirectoryName(Environment.ProcessPath
+                             ?? Process.GetCurrentProcess().MainModule?.FileName);
+            string logDir  = string.IsNullOrEmpty(exeDir) ? AppContext.BaseDirectory : exeDir;
+
+            // Walk up from bin/Debug/net8.0-windows/ if we're in a build output dir
+            string candidate = Path.GetFullPath(Path.Combine(logDir, "..", "..", "..", ".."));
+            if (Directory.Exists(candidate)) logDir = candidate;
+
             Action<string> logError = msg =>
             {
                 try { File.AppendAllText(Path.Combine(logDir, "crash.log"), $"[{DateTime.Now:s}] {msg}\n"); }
                 catch { /* swallow if we can't even write the crash log */ }
             };
 
-            _dataService = new DataService(logError);
-            _firewallService = new FirewallService(logError);
-            _networkMonitor = new NetworkMonitorService(logError, new GeoIpService());
+            _geoIpService         = new GeoIpService();
+            _dataService          = new DataService(logError);
+            _firewallService      = new FirewallService(logError);
+            _systemSettingsService= new SystemSettingsService(logError);
+            _networkMonitor       = new NetworkMonitorService(logError, _geoIpService);
 
             _networkMonitor.OnProactiveAlert = alert =>
             {
@@ -171,14 +224,14 @@ namespace MyFirewall.Desktop.ViewModels
             };
 
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
-            BlockIPCommand = new RelayCommand<object>(ExecuteBlockIP);
-            UnblockIPCommand = new RelayCommand<string>(ExecuteUnblockIP);
-            IgnoreAppCommand = new RelayCommand<string>(ExecuteIgnoreApp);
-            UnignoreAppCommand = new RelayCommand<string>(ExecuteUnignoreApp);
-            StopAppCommand = new RelayCommand<object>(ExecuteStopApp);
-            ClearAlertsCommand = new RelayCommand(_ => Alerts.Clear());
-            RefreshCommand = new RelayCommand(_ => Timer_Tick(null, EventArgs.Empty));
-            ExportLogCommand = new RelayCommand(_ => ExecuteExportLog());
+            BlockIPCommand         = new RelayCommand<object>(ExecuteBlockIP);
+            UnblockIPCommand       = new RelayCommand<string>(ExecuteUnblockIP);
+            IgnoreAppCommand       = new RelayCommand<string>(ExecuteIgnoreApp);
+            UnignoreAppCommand     = new RelayCommand<string>(ExecuteUnignoreApp);
+            StopAppCommand         = new RelayCommand<object>(ExecuteStopApp);
+            ClearAlertsCommand     = new RelayCommand(_ => Alerts.Clear());
+            RefreshCommand         = new RelayCommand(_ => Timer_Tick(null, EventArgs.Empty));
+            ExportLogCommand       = new RelayCommand(_ => ExecuteExportLog());
             DeselectConnectionCommand = new RelayCommand(_ => SelectedConnection = null);
 
             // Check admin status
@@ -206,7 +259,7 @@ namespace MyFirewall.Desktop.ViewModels
         {
             try
             {
-                var identity = WindowsIdentity.GetCurrent();
+                var identity  = WindowsIdentity.GetCurrent();
                 var principal = new WindowsPrincipal(identity);
                 return principal.IsInRole(WindowsBuiltInRole.Administrator);
             }
@@ -249,7 +302,7 @@ namespace MyFirewall.Desktop.ViewModels
             foreach (var app in _ignoredAppsSet.OrderBy(x => x))
                 IgnoredApps.Add(new IgnoredAppEntry { Application = app });
 
-            // Refresh firewall rule count
+            // Refresh firewall rule count (cached — no expensive COM enumeration unless invalidated)
             try { FirewallRuleCount = _firewallService.GetRuleCount(); }
             catch { /* non-critical */ }
         }
@@ -259,29 +312,21 @@ namespace MyFirewall.Desktop.ViewModels
             IsMonitorActive = _networkMonitor.IsRunning;
 
             // Update uptime
-            UptimeDisplay = (DateTime.Now - _startTime).ToString(@"hh\:mm\:ss");
+            UptimeDisplay  = (DateTime.Now - _startTime).ToString(@"hh\:mm\:ss");
             LastRefreshTime = DateTime.Now.ToString("HH:mm:ss");
 
             // Update total traffic stats
             var traffic = _networkMonitor.GetTotalTrafficStats();
-            TotalUpload = FormatBytes(traffic.TotalSent);
+            TotalUpload   = FormatBytes(traffic.TotalSent);
             TotalDownload = FormatBytes(traffic.TotalReceived);
 
-            var newConns = _networkMonitor.GetConnections(_ignoredAppsSet, _blockedIPsDict, _blockedProcessNames);
+            // Query OS for fresh connections
+            var freshConns = _networkMonitor.GetConnections(_ignoredAppsSet, _blockedIPsDict, _blockedProcessNames);
 
-            // Apply search filter
-            if (!string.IsNullOrWhiteSpace(_searchFilter))
-            {
-                string filter = _searchFilter.ToLower();
-                newConns = newConns.Where(c =>
-                    c.ApplicationName.ToLower().Contains(filter) ||
-                    c.Destination.Contains(filter) ||
-                    c.Domain.ToLower().Contains(filter) ||
-                    c.Location.ToLower().Contains(filter)
-                ).ToList();
-            }
+            // Fix #10: Store the unfiltered OS result so SearchFilter can apply client-side.
+            _latestConnections = freshConns;
 
-            var alerts = _networkMonitor.AutoEnforce(newConns, _firewallService, _blockedIPsDict, _blockedProcessNames);
+            var alerts = _networkMonitor.AutoEnforce(freshConns, _firewallService, _blockedIPsDict, _blockedProcessNames);
 
             bool saveNeeded = false;
             foreach (var alert in alerts)
@@ -296,8 +341,31 @@ namespace MyFirewall.Desktop.ViewModels
                 SyncObservables();
             }
 
-            // Smart-diff update: only add/remove/update changed connections (eliminates flicker)
-            SmartUpdateConnections(newConns);
+            // Apply filter (client-side) and smart-diff update
+            ApplyFilterAndUpdate(freshConns);
+            ConnectionCount = Connections.Count;
+        }
+
+        /// <summary>
+        /// Fix #10: Applies the current search filter to a connection list (client-side),
+        /// then drives the smart-diff update. Called from Timer_Tick AND from SearchFilter setter.
+        /// </summary>
+        private void ApplyFilterAndUpdate(List<ConnectionInfo> source)
+        {
+            IEnumerable<ConnectionInfo> filtered = source;
+
+            if (!string.IsNullOrWhiteSpace(_searchFilter))
+            {
+                string filter = _searchFilter.ToLower();
+                filtered = source.Where(c =>
+                    c.ApplicationName.ToLower().Contains(filter) ||
+                    c.Destination.Contains(filter) ||
+                    c.Domain.ToLower().Contains(filter) ||
+                    c.Location.ToLower().Contains(filter)
+                );
+            }
+
+            SmartUpdateConnections(filtered.ToList());
             ConnectionCount = Connections.Count;
         }
 
@@ -362,19 +430,19 @@ namespace MyFirewall.Desktop.ViewModels
         {
             if (parameter == null) return;
 
-            string ip = "";
+            string ip  = "";
             string app = "Unknown";
 
             if (parameter is ConnectionInfo conn)
             {
-                ip = conn.Destination;
+                ip  = conn.Destination;
                 app = conn.ApplicationName;
             }
             else if (parameter is string ipAndApp)
             {
                 if (string.IsNullOrWhiteSpace(ipAndApp)) return;
                 var parts = ipAndApp.Split('|');
-                ip = parts[0].Trim();
+                ip  = parts[0].Trim();
                 app = parts.Length > 1 ? parts[1].Trim() : "Unknown";
             }
             else
@@ -503,12 +571,14 @@ namespace MyFirewall.Desktop.ViewModels
 
         public void Shutdown()
         {
-            // Fix: Stop the timer to prevent post-disposal tick events
+            // Stop the timer to prevent post-disposal tick events
             _timer.Stop();
             _timer.Tick -= Timer_Tick;
             _networkMonitor.Stop();
             _dataService.SaveBlocked(_blockedIPsDict);
             _dataService.SaveIgnored(_ignoredAppsSet);
+            // Fix #15: Dispose GeoIpService (and its HttpClient) on shutdown
+            _geoIpService.Dispose();
         }
 
         private static string FormatBytes(long bytes)
