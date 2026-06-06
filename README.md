@@ -1,57 +1,84 @@
-# 🛡️ MyFirewall: Advanced TCP Monitor & Native Firewall
+# 🛡️ MyFirewall: Advanced TCP Monitor & Native Windows Firewall
 
-**MyFirewall** is a high-performance network security suite for Windows that combines real-time ETW (Event Tracing for Windows) network monitoring with native kernel-level traffic blocking. It provides both a modern WPF Desktop experience and a lightweight, high-speed CLI for power users.
+**MyFirewall** is a high-performance network security suite for Windows that integrates real-time kernel-level ETW (Event Tracing for Windows) monitoring with native traffic blocking. It provides both a modern WPF Desktop UI and a lightweight, high-speed CLI for command-line power users.
 
 ![MyFirewall Infographic](assets/infographic.png)
 
 ## 🚀 Key Features
 
--   **Real-Time Monitoring:** Leverages ETW (Event Tracing for Windows) for zero-overhead, kernel-level capture of all established TCP connections.
--   **Native Firewall Integration:** Unlike many software firewalls that run in user-space, MyFirewall communicates directly with the **Windows Filtering Platform (WFP)** via the native `HNetCfg.FwPolicy2` COM API.
--   **Smart Blocking:** Instantly block suspicious remote IPs or entire application process trees.
--   **Automatic Enforce:** Detects and blocks new connection attempts from previously flagged malicious processes.
--   **Zero-Flicker UI:** Smart-diffing algorithm in the Desktop app ensures smooth, real-time updates without the "refresh flicker" common in network monitors.
--   **Geographical Insights:** Integrated Geo-IP lookup and reverse DNS to identify where your data is going.
--   **Low Resource Footprint:** Minimal CPU and RAM usage, designed for 24/7 background operation.
+- **Real-Time Monitoring:** Zero-overhead, kernel-level tracing of all TCP connections using Event Tracing for Windows (ETW).
+- **Native WFP Integration:** Direct integration with the Windows Filtering Platform (WFP) via the COM `HNetCfg.FwPolicy2` API. Unlike standard solutions, it does not rely on calling slow `netsh.exe` or `powershell.exe` processes.
+- **Threat Intelligence:** Process Metadata Service that queries execution path, parent process information, digital signature validation, and file timestamps using P/Invoke APIs.
+- **Smart Rule Management:** Persistent blocked IP list (`blocked.txt`) storing timestamped metadata, with sub-millisecond late-binding evaluation via COM rules.
+- **Smart-Diff WPF Layout:** Custom Wpf list diffing that prevents visual flickering when connections update in real-time.
+- **Geographical & Reverse DNS lookup:** Resolves remote hostnames and locations asynchronously with automatic TTL-based caching.
+- **Process Tree Termination:** Cleanly stops suspicious applications along with their entire process tree to prevent lingering connections.
+- **Language Sync & Widget Management:** System utilities to inspect and toggle Windows features like widgets, search box, and setting synchronization.
+
+---
 
 ## 🛠 Architecture
 
-MyFirewall is built with a focus on performance and system integrity:
+MyFirewall is designed with low overhead and strong security constraints:
 
--   **Kernel Tracing:** Uses `Microsoft.Diagnostics.Tracing.TraceEvent` to tap into the Windows Kernel network stack.
--   **Native Interop:** Direct COM Interop for Windows Firewall management, avoiding the overhead of `powershell.exe` or `netsh`.
--   **Process Tree Termination:** Robust process handling that cleans up entire process trees to prevent "zombie" network connections.
--   **Safe Elevation:** Built-in UAC auto-redirection to ensure the monitor has the necessary privileges to access kernel events and modify firewall policies.
+```
+[Network Activity] ──> [Windows Kernel (ETW)] ──> [NetworkMonitorService]
+                                                           │
+ [WPF Desktop UI]  <── [MainViewModel (Smart Diff)] <──────┼──> [ProcessMetadataService]
+       or                                                  │    (Digital Signatures)
+  [Console CLI]    <───────────────────────────────────────┘
+       │
+       └──> [FirewallManager (Direct COM Interop)] ──> [Windows Filtering Platform]
+```
+
+1. **Kernel Tracing:** Connects to Microsoft Windows kernel events to catch socket connection creations.
+2. **Metadata Evaluation:** TTL-evicted (60s) metadata caches prevent process-identity confusion when Windows recycles PIDs.
+3. **Firewall Rules:** Grouped under the `MyFirewall-` namespace, rule-evaluation occurs natively in kernel space.
+
+---
 
 ## 📥 Installation & Verification
 
-Download the latest release for your preferred environment. For security, always verify the checksums before execution.
+Download the verified release zip archives below:
 
 | Asset | Platform | SHA256 Checksum |
 | :--- | :--- | :--- |
-| `release_cli_win_x64.zip` | Windows x64 (CLI) | `05E855F4D58D8D82AA31FCCC9E9E9A988987ED474156C154A01F9D518BCB8FF0` |
-| `release_desktop_win_x64.zip` | Windows x64 (WPF) | `FA6CAE735F170EA4A654DCAAE5665C0A9EB7F8717C8B0C0C2F29C1C21C3209ED` |
+| `release_cli_win_x64.zip` | Windows x64 (CLI Console) | `161942FBF0AAB6C6529665646CEBC310694CACE4743896281D8715D91E5F402A` |
+| `release_desktop_win_x64.zip` | Windows x64 (WPF Desktop UI) | `F5ACBDB482EB0C8DB9FA72D288CF884793445713C7265EBF9FA12844B7C247DE` |
 
 ### Manual Verification
+Ensure the integrity of the downloaded binaries using PowerShell:
 ```powershell
-Get-FileHash MyFirewall.exe -Algorithm SHA256
+Get-FileHash release_desktop_win_x64.zip -Algorithm SHA256
 ```
+
+---
 
 ## 📖 Usage
 
-### Desktop App
-1.  Launch `MyFirewall.Desktop.exe`.
-2.  Review the live connection grid.
-3.  **Right-click** any connection to block the IP, hide the application, or terminate the process tree.
-4.  Monitor traffic stats and active firewall rules in the dashboard.
+Both applications require administrative privileges (UAC elevation) to hook into the ETW session and communicate with the native firewall COM interface.
 
-### CLI App
--   `Q`: Quit
--   `K`: Kill a process (interactive)
--   `B`: Block/Unblock IPs (interactive)
--   `I`: Manage ignored applications
--   `L`: Toggle detailed lists
--   `H`: Show help
+### Desktop WPF UI
+1. Launch `MyFirewall.Desktop.exe`.
+2. Inspect live connection stats, bandwidth activity, and the active connections grid.
+3. **Right-Click** any row to:
+   - **Block Remote IP:** Create a native block rule immediately.
+   - **Ignore Process:** Filter out the application from the monitoring panel.
+   - **Kill Process Tree:** Terminate the process and its subprocesses.
+4. Use the toolbar toggles to choose between **Connection-Driven** or **Proactive ETW Process Start** threat intelligence monitoring strategies.
+
+### Console CLI
+Run `MyFirewall.exe`. Interact using the following keyboard controls:
+- **`Q`**: Quit the monitor cleanly.
+- **`K`**: Kill an active process by PID or Name (interactive).
+- **`B`**: Manage blocked IPs list.
+- **`I`**: Manage ignored processes list.
+- **`P`**: Show Process Intelligence/Details (parent PID, path, digital signature).
+- **`T`**: Toggle Threat Intelligence strategy at runtime.
+- **`L`**: Toggle extra lists (active blocks and ignores) on the console view.
+- **`H`**: Display help drawer.
+
+---
 
 ## 📄 License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
