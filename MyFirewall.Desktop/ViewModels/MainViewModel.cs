@@ -458,6 +458,7 @@ namespace MyFirewall.Desktop.ViewModels
                 {
                     _blockedIPsDict[ip] = new BlockedIPMetadata { Application = app, Timestamp = DateTime.Now };
                     _dataService.SaveBlocked(_blockedIPsDict);
+                    _networkMonitor.ResetConnectionsToIp(ip); // Sever any existing active connections
                     SyncObservables();
                     AddAlert($"Blocked {ip} ({app})", AlertSeverity.Warning);
                 }

@@ -213,6 +213,21 @@ namespace MyFirewall.Desktop.Services
             public uint dwOwningPid;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MIB_TCPROW
+        {
+            public uint dwState;
+            public uint dwLocalAddr;
+            public uint dwLocalPort;
+            public uint dwRemoteAddr;
+            public uint dwRemotePort;
+        }
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint SetTcpEntry(ref MIB_TCPROW pTcprow);
+
+        private const uint MIB_TCP_STATE_DELETE_TCB = 12;
+
         // ─────────────────────────────────────────────────────────────────────────
         //  P/Invoke: IPv6 TCP table (Fix #12)
         // ─────────────────────────────────────────────────────────────────────────
@@ -430,6 +445,66 @@ namespace MyFirewall.Desktop.Services
                 _socketHistory.Remove(key);
         }
 
+        public void ResetConnectionsToIp(string destinationIp)
+        {
+            if (string.IsNullOrWhiteSpace(destinationIp)) return;
+
+            int bufferSize = 0;
+            GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL);
+            if (bufferSize <= 0) return;
+
+            IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
+            try
+            {
+                if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0) return;
+
+                int rowCount = Marshal.ReadInt32(ptr);
+                IntPtr rowPtr = ptr + 4;
+
+                for (int i = 0; i < rowCount; i++)
+                {
+                    try
+                    {
+                        var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
+                        rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+
+                        if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT && row.dwState != TCP_STATE_TIME_WAIT) continue;
+
+                        string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
+                        if (remoteIP == destinationIp)
+                        {
+                            MIB_TCPROW resetRow = new MIB_TCPROW
+                            {
+                                dwState = MIB_TCP_STATE_DELETE_TCB,
+                                dwLocalAddr = row.dwLocalAddr,
+                                dwLocalPort = row.dwLocalPort,
+                                dwRemoteAddr = row.dwRemoteAddr,
+                                dwRemotePort = row.dwRemotePort
+                            };
+
+                            uint res = SetTcpEntry(ref resetRow);
+                            if (res != 0)
+                            {
+                                _logError($"SetTcpEntry failed for {remoteIP} with error code: {res}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logError($"ResetConnectionsToIp row: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logError($"ResetConnectionsToIp: {ex.Message}");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+
         public List<AlertEntry> AutoEnforce(List<ConnectionInfo> conns, FirewallService fwService, Dictionary<string, BlockedIPMetadata> blockedIPs, HashSet<string> blockedProcessNames)
         {
             var alerts = new List<AlertEntry>();
@@ -448,6 +523,7 @@ namespace MyFirewall.Desktop.Services
                 if (fwService.AddBlockRule(conn.Destination, conn.ApplicationName))
                 {
                     blockedIPs[conn.Destination] = new BlockedIPMetadata { Application = conn.ApplicationName, Timestamp = DateTime.Now };
+                    ResetConnectionsToIp(conn.Destination); // Sever any existing active connections
                     alerts.Add(new AlertEntry
                     {
                         Message  = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",

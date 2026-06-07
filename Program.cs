@@ -139,6 +139,21 @@ class Program
         public uint dwOwningPid;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MIB_TCPROW
+    {
+        public uint dwState;
+        public uint dwLocalAddr;
+        public uint dwLocalPort;
+        public uint dwRemoteAddr;
+        public uint dwRemotePort;
+    }
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    private static extern uint SetTcpEntry(ref MIB_TCPROW pTcprow);
+
+    private const uint MIB_TCP_STATE_DELETE_TCB = 12;
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
 
@@ -1142,6 +1157,8 @@ class Program
             bool added  = FirewallManager.AddBlockRule(ip, proc);
             if (!added)
                 AnsiConsole.MarkupLine($"[yellow]Note: Firewall rule for {ip} may already exist or failed — check {CrashLogFile}[/]");
+            else
+                ResetConnectionsToIp(ip); // Sever any existing active connections
         }
 
         foreach (var ip in newlyUnblocked)
@@ -1178,6 +1195,7 @@ class Program
                 _blockedIPs[conn.RemoteIP] = new BlockedIPMetadata { ProcessName = conn.ProcessName, Timestamp = DateTime.Now };
                 RebuildBlockedProcessNames();
                 SaveBlockList();
+                ResetConnectionsToIp(conn.RemoteIP); // Sever any existing active connections
 
                 lock (_alertLock)
                 {
@@ -1267,6 +1285,66 @@ class Program
     #endregion
 
     #region NetworkHelpers
+
+    static void ResetConnectionsToIp(string destinationIp)
+    {
+        if (string.IsNullOrWhiteSpace(destinationIp)) return;
+
+        int bufferSize = 0;
+        GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL);
+        if (bufferSize <= 0) return;
+
+        IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0) return;
+
+            int rowCount = Marshal.ReadInt32(ptr);
+            IntPtr rowPtr = ptr + 4;
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                try
+                {
+                    var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
+                    rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+
+                    if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT && row.dwState != TCP_STATE_TIME_WAIT) continue;
+
+                    string remoteIP = new IPAddress(BitConverter.GetBytes(row.dwRemoteAddr)).ToString();
+                    if (remoteIP == destinationIp)
+                    {
+                        MIB_TCPROW resetRow = new MIB_TCPROW
+                        {
+                            dwState = MIB_TCP_STATE_DELETE_TCB,
+                            dwLocalAddr = row.dwLocalAddr,
+                            dwLocalPort = row.dwLocalPort,
+                            dwRemoteAddr = row.dwRemoteAddr,
+                            dwRemotePort = row.dwRemotePort
+                        };
+
+                        uint res = SetTcpEntry(ref resetRow);
+                        if (res != 0)
+                        {
+                            LogCrash($"SetTcpEntry failed for {remoteIP} with error code: {res}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"ResetConnectionsToIp row: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogCrash($"ResetConnectionsToIp: {ex.Message}");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
 
     static List<TcpConnectionInfo> GetTcpConnections(bool includeIgnored = false)
     {
