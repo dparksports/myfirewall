@@ -35,7 +35,7 @@ namespace MyFirewall.Desktop.Services
         private readonly Dictionary<string, string> _socketHistory = new();
         public bool IsRunning { get; private set; }
 
-        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ConnectionDriven;
+        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ProcessStartEtw;
         public ProcessMonitoringStrategy MonitoringStrategy => _monitoringStrategy;
         public Action<AlertEntry>? OnProactiveAlert { get; set; }
         private readonly HashSet<int> _proactiveEvaluatedPids = new();

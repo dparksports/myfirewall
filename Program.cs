@@ -356,7 +356,7 @@ class Program
         private readonly object _lock = new();
         public bool IsRunning { get; private set; }
 
-        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ConnectionDriven;
+        private ProcessMonitoringStrategy _monitoringStrategy = ProcessMonitoringStrategy.ProcessStartEtw;
         public ProcessMonitoringStrategy MonitoringStrategy => _monitoringStrategy;
         public Action<string>? OnProactiveAlert { get; set; }
         private readonly HashSet<int> _proactiveEvaluatedPids = new();
