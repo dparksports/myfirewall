@@ -855,7 +855,7 @@ class Program
             $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
             $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
             $"  [cyan]P[/]       Process Intelligence / Details (interactive)\n" +
-            $"  [cyan]S[/]       System Settings (Language sync, Widgets, Search) (interactive)\n" +
+            $"  [cyan]S[/]       System Settings (Language sync, Widgets, Search, Hosts) (interactive)\n" +
             $"  [cyan]T[/]       Toggle Threat Intel Strategy (runtime)\n" +
             $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
             $"  [cyan]H / F1[/]  Show this help screen\n\n" +
@@ -1218,6 +1218,8 @@ class Program
             var widgetsEnabled = SystemSettingsManager.IsWidgetsEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
             var searchEnabled = SystemSettingsManager.IsSearchHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
             var searchBgBingStatus = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled() ? "[red]Disabled[/]" : "[green]Enabled[/]";
+            var startMenuEnabled = SystemSettingsManager.IsStartMenuExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+            var shellExpEnabled = SystemSettingsManager.IsShellExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
 
             var prompt = new SelectionPrompt<string>()
                 .Title("[bold cyan]System Settings Management[/]\nSelect an option to toggle:")
@@ -1226,9 +1228,13 @@ class Program
                     $"Toggle Windows Widgets (Current: {widgetsEnabled})",
                     $"Toggle SearchHost Box (Current: {searchEnabled})",
                     $"Toggle SearchHost Background & Bing Search (Current: {searchBgBingStatus})",
+                    $"Toggle StartMenuExperienceHost (Current: {startMenuEnabled})",
+                    $"Toggle ShellExperienceHost (Current: {shellExpEnabled})",
                     "Stop SettingSyncHost Process",
                     "Stop Widgets Process",
                     "Stop SearchHost Process",
+                    "Stop StartMenuExperienceHost Process",
+                    "Stop ShellExperienceHost Process",
                     "Back to Monitor"
                 );
 
@@ -1265,6 +1271,20 @@ class Program
                 AnsiConsole.MarkupLine($"SearchHost Background & Bing Search suggestions set to {(newStateDisable ? "[red]Disabled[/]" : "[green]Enabled[/]")}.");
                 if (newStateDisable) SystemSettingsManager.StopProcess("SearchHost");
             }
+            else if (selection.StartsWith("Toggle StartMenuExperienceHost"))
+            {
+                bool newState = !SystemSettingsManager.IsStartMenuExperienceHostEnabled();
+                SystemSettingsManager.SetStartMenuExperienceHostEnabled(newState);
+                AnsiConsole.MarkupLine($"StartMenuExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+                if (!newState) SystemSettingsManager.StopProcess("StartMenuExperienceHost");
+            }
+            else if (selection.StartsWith("Toggle ShellExperienceHost"))
+            {
+                bool newState = !SystemSettingsManager.IsShellExperienceHostEnabled();
+                SystemSettingsManager.SetShellExperienceHostEnabled(newState);
+                AnsiConsole.MarkupLine($"ShellExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+                if (!newState) SystemSettingsManager.StopProcess("ShellExperienceHost");
+            }
             else if (selection.StartsWith("Stop SettingSyncHost Process"))
             {
                 SystemSettingsManager.StopProcess("SettingSyncHost");
@@ -1276,6 +1296,14 @@ class Program
             else if (selection.StartsWith("Stop SearchHost Process"))
             {
                 SystemSettingsManager.StopProcess("SearchHost");
+            }
+            else if (selection.StartsWith("Stop StartMenuExperienceHost Process"))
+            {
+                SystemSettingsManager.StopProcess("StartMenuExperienceHost");
+            }
+            else if (selection.StartsWith("Stop ShellExperienceHost Process"))
+            {
+                SystemSettingsManager.StopProcess("ShellExperienceHost");
             }
 
             Thread.Sleep(1500);
@@ -1798,6 +1826,78 @@ static class SystemSettingsManager
             }
         }
         catch (Exception ex) { Program.LogCrash($"SetSearchHostBackgroundAndBingDisabled: {ex.Message}"); }
+    }
+
+    public static bool IsStartMenuExperienceHostEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+            if (key != null)
+            {
+                var val = key.GetValue("Debugger");
+                if (val != null) return false;
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void SetStartMenuExperienceHostEnabled(bool enable)
+    {
+        try
+        {
+            if (enable)
+            {
+                using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                if (parentKey != null)
+                {
+                    parentKey.DeleteSubKeyTree("StartMenuExperienceHost.exe", throwOnMissingSubKey: false);
+                }
+            }
+            else
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+                key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
+            }
+        }
+        catch (Exception ex) { Program.LogCrash($"SetStartMenuExperienceHostEnabled: {ex.Message}"); }
+    }
+
+    public static bool IsShellExperienceHostEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+            if (key != null)
+            {
+                var val = key.GetValue("Debugger");
+                if (val != null) return false;
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void SetShellExperienceHostEnabled(bool enable)
+    {
+        try
+        {
+            if (enable)
+            {
+                using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                if (parentKey != null)
+                {
+                    parentKey.DeleteSubKeyTree("ShellExperienceHost.exe", throwOnMissingSubKey: false);
+                }
+            }
+            else
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+                key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
+            }
+        }
+        catch (Exception ex) { Program.LogCrash($"SetShellExperienceHostEnabled: {ex.Message}"); }
     }
 
     public static void StopProcess(string processName)
