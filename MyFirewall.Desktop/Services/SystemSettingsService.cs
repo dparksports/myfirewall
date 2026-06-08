@@ -99,6 +99,78 @@ namespace MyFirewall.Desktop.Services
             catch (Exception ex) { _logError($"SetSearchHostEnabled: {ex.Message}"); }
         }
 
+        public bool IsStartMenuExperienceHostEnabled()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+                if (key != null)
+                {
+                    var val = key.GetValue("Debugger");
+                    if (val != null) return false;
+                }
+                return true;
+            }
+            catch { return true; }
+        }
+
+        public void SetStartMenuExperienceHostEnabled(bool enable)
+        {
+            try
+            {
+                if (enable)
+                {
+                    using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                    if (parentKey != null)
+                    {
+                        parentKey.DeleteSubKeyTree("StartMenuExperienceHost.exe", throwOnMissingSubKey: false);
+                    }
+                }
+                else
+                {
+                    using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+                    key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
+                }
+            }
+            catch (Exception ex) { _logError($"SetStartMenuExperienceHostEnabled: {ex.Message}"); }
+        }
+
+        public bool IsShellExperienceHostEnabled()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+                if (key != null)
+                {
+                    var val = key.GetValue("Debugger");
+                    if (val != null) return false;
+                }
+                return true;
+            }
+            catch { return true; }
+        }
+
+        public void SetShellExperienceHostEnabled(bool enable)
+        {
+            try
+            {
+                if (enable)
+                {
+                    using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                    if (parentKey != null)
+                    {
+                        parentKey.DeleteSubKeyTree("ShellExperienceHost.exe", throwOnMissingSubKey: false);
+                    }
+                }
+                else
+                {
+                    using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+                    key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
+                }
+            }
+            catch (Exception ex) { _logError($"SetShellExperienceHostEnabled: {ex.Message}"); }
+        }
+
         public void StopProcess(string processName)
         {
             try

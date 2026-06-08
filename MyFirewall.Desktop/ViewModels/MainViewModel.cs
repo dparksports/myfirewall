@@ -180,6 +180,30 @@ namespace MyFirewall.Desktop.ViewModels
             }
         }
 
+        public bool IsStartMenuExperienceHostEnabled
+        {
+            get => _systemSettingsService.IsStartMenuExperienceHostEnabled();
+            set
+            {
+                _systemSettingsService.SetStartMenuExperienceHostEnabled(value);
+                if (!value) _systemSettingsService.StopProcess("StartMenuExperienceHost");
+                OnPropertyChanged(nameof(IsStartMenuExperienceHostEnabled));
+                AddAlert($"StartMenuExperienceHost {(value ? "enabled" : "removed")}", AlertSeverity.Info);
+            }
+        }
+
+        public bool IsShellExperienceHostEnabled
+        {
+            get => _systemSettingsService.IsShellExperienceHostEnabled();
+            set
+            {
+                _systemSettingsService.SetShellExperienceHostEnabled(value);
+                if (!value) _systemSettingsService.StopProcess("ShellExperienceHost");
+                OnPropertyChanged(nameof(IsShellExperienceHostEnabled));
+                AddAlert($"ShellExperienceHost {(value ? "enabled" : "removed")}", AlertSeverity.Info);
+            }
+        }
+
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
         public RelayCommand<string> UnblockIPCommand { get; }
