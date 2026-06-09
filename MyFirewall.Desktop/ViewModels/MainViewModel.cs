@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -204,6 +204,34 @@ namespace MyFirewall.Desktop.ViewModels
             }
         }
 
+        public bool IsWebView2Blocked
+        {
+            get => _systemSettingsService.IsWebView2Blocked();
+            set
+            {
+                _systemSettingsService.SetWebView2Blocked(value);
+                if (value)
+                {
+                    string path = _systemSettingsService.FindWebView2Path();
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        _firewallService.ApplyWebView2NetworkBlock(path);
+                        AddAlert($"Proactively blocked WebView2 outbound network (Path: {path})", AlertSeverity.Info);
+                    }
+                    else
+                    {
+                        AddAlert("Failed to locate msedgewebview2.exe on this system.", AlertSeverity.Warning);
+                    }
+                }
+                else
+                {
+                    _firewallService.RemoveWebView2NetworkBlock();
+                    AddAlert("Allowed WebView2 outbound network requests.", AlertSeverity.Info);
+                }
+                OnPropertyChanged(nameof(IsWebView2Blocked));
+            }
+        }
+
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
         public RelayCommand<string> UnblockIPCommand { get; }
@@ -262,6 +290,20 @@ namespace MyFirewall.Desktop.ViewModels
             IsAdmin = CheckIsAdmin();
 
             LoadData();
+
+            // Proactive WebView2 Network Block on Startup
+            try
+            {
+                if (_systemSettingsService.IsWebView2Blocked())
+                {
+                    string path = _systemSettingsService.FindWebView2Path();
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        _firewallService.ApplyWebView2NetworkBlock(path);
+                    }
+                }
+            }
+            catch { }
 
             try
             {

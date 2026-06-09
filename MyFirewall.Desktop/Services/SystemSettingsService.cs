@@ -171,6 +171,52 @@ namespace MyFirewall.Desktop.Services
             catch (Exception ex) { _logError($"SetShellExperienceHostEnabled: {ex.Message}"); }
         }
 
+        public string FindWebView2Path()
+        {
+            try
+            {
+                string baseDir = @"C:\Program Files (x86)\Microsoft\EdgeWebView\Application";
+                if (System.IO.Directory.Exists(baseDir))
+                {
+                    var exeFiles = System.IO.Directory.GetFiles(baseDir, "msedgewebview2.exe", System.IO.SearchOption.AllDirectories);
+                    if (exeFiles.Length > 0)
+                    {
+                        var sorted = exeFiles.Select(f => new System.IO.FileInfo(f))
+                                             .OrderByDescending(f => f.LastWriteTime)
+                                             .ToList();
+                        return sorted[0].FullName;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public bool IsWebView2Blocked()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\MyFirewall");
+                if (key != null)
+                {
+                    var val = key.GetValue("BlockWebView2Network");
+                    if (val is int i && i == 1) return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
+        public void SetWebView2Blocked(bool block)
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\MyFirewall");
+                key.SetValue("BlockWebView2Network", block ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            }
+            catch (Exception ex) { _logError($"SetWebView2Blocked: {ex.Message}"); }
+        }
+
         public void StopProcess(string processName)
         {
             try

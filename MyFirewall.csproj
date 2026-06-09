@@ -6,9 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>5.7.7</Version>
-    <AssemblyVersion>5.7.7.0</AssemblyVersion>
-    <FileVersion>5.7.7.0</FileVersion>
+    <Version>5.7.8</Version>
+    <AssemblyVersion>5.7.8.0</AssemblyVersion>
+    <FileVersion>5.7.8.0</FileVersion>
     <DefaultItemExcludes>MyFirewall.Desktop\**;testcom\**;Test*.cs;$(DefaultItemExcludes)</DefaultItemExcludes>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>

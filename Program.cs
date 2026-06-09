@@ -329,6 +329,54 @@ class Program
             }
         }
 
+        public static bool ApplyWebView2NetworkBlock(string path)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return false;
+
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+
+                    rule.Name = "MyFirewall-Block-WebView2";
+                    rule.Description = "Proactively blocks msedgewebview2.exe outbound network connections.";
+                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    rule.ApplicationName = path;
+                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Enabled = true;
+                    rule.Profiles = 7;
+
+                    policy.Rules.Add(rule);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"ApplyWebView2NetworkBlock failed: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        public static void RemoveWebView2NetworkBlock()
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return;
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+                }
+                catch (Exception ex) { LogCrash($"RemoveWebView2NetworkBlock failed: {ex.Message}"); }
+            }
+        }
+
         /// <summary>Removes all TCP-Monitor block rules matching the given IP.</summary>
         public static void RemoveBlockRule(string ip)
         {
@@ -1898,6 +1946,52 @@ static class SystemSettingsManager
             }
         }
         catch (Exception ex) { Program.LogCrash($"SetShellExperienceHostEnabled: {ex.Message}"); }
+    }
+
+    public static string FindWebView2Path()
+    {
+        try
+        {
+            string baseDir = @"C:\Program Files (x86)\Microsoft\EdgeWebView\Application";
+            if (System.IO.Directory.Exists(baseDir))
+            {
+                var exeFiles = System.IO.Directory.GetFiles(baseDir, "msedgewebview2.exe", System.IO.SearchOption.AllDirectories);
+                if (exeFiles.Length > 0)
+                {
+                    var sorted = exeFiles.Select(f => new System.IO.FileInfo(f))
+                                         .OrderByDescending(f => f.LastWriteTime)
+                                         .ToList();
+                    return sorted[0].FullName;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static bool IsWebView2Blocked()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\MyFirewall");
+            if (key != null)
+            {
+                var val = key.GetValue("BlockWebView2Network");
+                if (val is int i && i == 1) return true;
+            }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    public static void SetWebView2Blocked(bool block)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\MyFirewall");
+            key.SetValue("BlockWebView2Network", block ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Program.LogCrash($"SetWebView2Blocked: {ex.Message}"); }
     }
 
     public static void StopProcess(string processName)

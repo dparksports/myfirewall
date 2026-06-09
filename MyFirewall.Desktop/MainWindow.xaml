@@ -1,4 +1,4 @@
-<Window x:Class="MyFirewall.Desktop.MainWindow"
+﻿<Window x:Class="MyFirewall.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:MyFirewall.Desktop.ViewModels"
@@ -469,6 +469,7 @@
                                 <CheckBox Content="SearchHost Box" IsChecked="{Binding IsSearchHostEnabled}" Margin="0,4"/>
                                 <CheckBox Content="StartMenuExperienceHost" IsChecked="{Binding IsStartMenuExperienceHostEnabled}" Margin="0,4"/>
                                 <CheckBox Content="ShellExperienceHost" IsChecked="{Binding IsShellExperienceHostEnabled}" Margin="0,4"/>
+                                <CheckBox Content="Block WebView2 Net" IsChecked="{Binding IsWebView2Blocked}" Margin="0,4" Foreground="{StaticResource StatusAmber}"/>
                             </StackPanel>
                         </Grid>
                     </Border>

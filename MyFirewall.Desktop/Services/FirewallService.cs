@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace MyFirewall.Desktop.Services
@@ -177,6 +177,56 @@ namespace MyFirewall.Desktop.Services
                     _logError($"FirewallService.GetRuleCount: {ex.Message}");
                     return 0;
                 }
+            }
+        }
+
+        public bool ApplyWebView2NetworkBlock(string path)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return false;
+
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+
+                    rule.Name = "MyFirewall-Block-WebView2";
+                    rule.Description = "Proactively blocks msedgewebview2.exe outbound network connections.";
+                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    rule.ApplicationName = path;
+                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Enabled = true;
+                    rule.Profiles = 7;
+
+                    policy.Rules.Add(rule);
+                    _cachedRuleCount = -1;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logError($"ApplyWebView2NetworkBlock failed: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        public void RemoveWebView2NetworkBlock()
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return;
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+                    _cachedRuleCount = -1;
+                }
+                catch (Exception ex) { _logError($"RemoveWebView2NetworkBlock failed: {ex.Message}"); }
             }
         }
 
