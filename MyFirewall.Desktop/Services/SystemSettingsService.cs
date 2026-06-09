@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 
 namespace MyFirewall.Desktop.Services
@@ -103,7 +103,7 @@ namespace MyFirewall.Desktop.Services
         {
             try
             {
-                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
                 if (key != null)
                 {
                     var val = key.GetValue("Debugger");
@@ -120,7 +120,7 @@ namespace MyFirewall.Desktop.Services
             {
                 if (enable)
                 {
-                    using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                    using var parentKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
                     if (parentKey != null)
                     {
                         parentKey.DeleteSubKeyTree("StartMenuExperienceHost.exe", throwOnMissingSubKey: false);
@@ -128,7 +128,7 @@ namespace MyFirewall.Desktop.Services
                 }
                 else
                 {
-                    using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
+                    using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\StartMenuExperienceHost.exe");
                     key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
                 }
             }
@@ -139,7 +139,7 @@ namespace MyFirewall.Desktop.Services
         {
             try
             {
-                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
                 if (key != null)
                 {
                     var val = key.GetValue("Debugger");
@@ -156,7 +156,7 @@ namespace MyFirewall.Desktop.Services
             {
                 if (enable)
                 {
-                    using var parentKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
+                    using var parentKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options", writable: true);
                     if (parentKey != null)
                     {
                         parentKey.DeleteSubKeyTree("ShellExperienceHost.exe", throwOnMissingSubKey: false);
@@ -164,7 +164,7 @@ namespace MyFirewall.Desktop.Services
                 }
                 else
                 {
-                    using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
+                    using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\ShellExperienceHost.exe");
                     key.SetValue("Debugger", "systray.exe", Microsoft.Win32.RegistryValueKind.String);
                 }
             }
