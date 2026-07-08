@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -212,7 +212,7 @@ namespace MyFirewall.Desktop.ViewModels
                 _systemSettingsService.SetWebView2Blocked(value);
                 if (value)
                 {
-                    string path = _systemSettingsService.FindWebView2Path();
+                    string? path = _systemSettingsService.FindWebView2Path();
                     if (!string.IsNullOrEmpty(path))
                     {
                         _firewallService.ApplyWebView2NetworkBlock(path);
@@ -296,7 +296,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 if (_systemSettingsService.IsWebView2Blocked())
                 {
-                    string path = _systemSettingsService.FindWebView2Path();
+                    string? path = _systemSettingsService.FindWebView2Path();
                     if (!string.IsNullOrEmpty(path))
                     {
                         _firewallService.ApplyWebView2NetworkBlock(path);

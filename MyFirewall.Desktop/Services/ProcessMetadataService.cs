@@ -1,3 +1,4 @@
+#pragma warning disable SYSLIB0057
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;

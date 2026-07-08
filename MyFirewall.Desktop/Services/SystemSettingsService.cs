@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 
 namespace MyFirewall.Desktop.Services
@@ -171,7 +171,7 @@ namespace MyFirewall.Desktop.Services
             catch (Exception ex) { _logError($"SetShellExperienceHostEnabled: {ex.Message}"); }
         }
 
-        public string FindWebView2Path()
+        public string? FindWebView2Path()
         {
             try
             {
