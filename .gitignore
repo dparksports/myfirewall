@@ -72,4 +72,8 @@ TestFw.cs
 test_fw.ps1
 test_fw2.ps1
 testcom/
-
+publish_cli/
+publish_cli_single/
+publish_desktop_single/
+blocked copy.txt
+blocked-fidelity.txt

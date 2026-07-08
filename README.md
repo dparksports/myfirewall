@@ -137,6 +137,7 @@ Launch `MyFirewall.exe` as Administrator to start the live-monitoring terminal d
 | **`I`** | **Ignore Process Filter** | Manage application filtering rules to hide benign process traffic. |
 | **`P`** | **Inspect Signature** | Verify Authenticode digital signatures, certificate chains, and trust paths. |
 | **`L`** | **Toggle Details** | Show or hide active firewall rules and system statistics at the bottom of the dashboard. |
+| **`R`** | **Restore Firewall** | Disable all active firewall rules and restore only the explicit Chrome block rule. |
 | **`H`** | **Interactive Help** | Slide open the interactive keyboard help modal overlay. |
 
 ---

@@ -378,6 +378,45 @@ class Program
             }
         }
 
+        public static void RestoreHardcodedConfiguration()
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return;
+                    
+                    int count = 0;
+                    foreach (INetFwRule rule in policy.Rules)
+                    {
+                        if (rule.Enabled)
+                        {
+                            try { rule.Enabled = false; count++; } catch { }
+                        }
+                    }
+
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+                    INetFwRule chromeRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    
+                    chromeRule.Name = "chrome.exe";
+                    chromeRule.ApplicationName = @"C:\users\j3b650v2\appdata\local\google\chrome\application\chrome.exe";
+                    chromeRule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
+                    chromeRule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    chromeRule.Profiles = 4; // NET_FW_PROFILE2_PUBLIC = 4
+                    chromeRule.Enabled = true;
+                    chromeRule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+
+                    policy.Rules.Add(chromeRule);
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"RestoreHardcodedConfiguration failed: {ex.Message}");
+                    throw;
+                }
+            }
+        }
+
         /// <summary>Removes all TCP-Monitor block rules matching the given IP.</summary>
         public static void RemoveBlockRule(string ip)
         {
@@ -755,7 +794,7 @@ class Program
 
         var table = new Table().Border(TableBorder.Rounded).Expand();
         table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | S System Settings | T Toggle Strategy | L Lists | H Help[/]");
+        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | S System Settings | T Toggle Strategy | L Lists | R Restore FW | H Help[/]");
 
         table.AddColumn("#");
         table.AddColumn("Process");
@@ -881,6 +920,7 @@ class Program
                 }
                 break;
             case ConsoleKey.L: Console.Clear(); _showExtraLists = !_showExtraLists; break;
+            case ConsoleKey.R: Console.Clear(); RestoreFirewallConfigurationInteractive(); break;
             case ConsoleKey.H:
             case ConsoleKey.F1:
                 ShowHelp();
@@ -907,6 +947,7 @@ class Program
             $"  [cyan]S[/]       System Settings (Language sync, Widgets, Search, Hosts) (interactive)\n" +
             $"  [cyan]T[/]       Toggle Threat Intel Strategy (runtime)\n" +
             $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
+            $"  [cyan]R[/]       Restore explicit firewall rules (disable all others)\n" +
             $"  [cyan]H / F1[/]  Show this help screen\n\n" +
             $"[bold cyan]Status[/]\n" +
             $"  ETW Tracing     : {etwStatus}\n" +
@@ -1357,6 +1398,28 @@ class Program
 
             Thread.Sleep(1500);
         }
+    }
+
+    static void RestoreFirewallConfigurationInteractive()
+    {
+        var prompt = new SelectionPrompt<string>()
+            .Title("[bold red]WARNING:[/] This will disable all active firewall rules and restore only the explicit Chrome block rule. Proceed?")
+            .AddChoices("Yes, restore and disable others", "Cancel");
+
+        var selection = AnsiConsole.Prompt(prompt);
+        if (selection == "Cancel") return;
+
+        try
+        {
+            AnsiConsole.MarkupLine("[cyan]Disabling existing rules and applying hardcoded configuration...[/]");
+            FirewallManager.RestoreHardcodedConfiguration();
+            AnsiConsole.MarkupLine("[green]Configuration restored successfully.[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Failed: {Markup.Escape(ex.Message)}[/]");
+        }
+        Thread.Sleep(2000);
     }
 
     #endregion
