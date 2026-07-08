@@ -1,4 +1,5 @@
-﻿using Spectre.Console;
+#pragma warning disable SYSLIB0057
+using Spectre.Console;
 using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Session;
 using Microsoft.Diagnostics.Tracing.Parsers;
@@ -1638,13 +1639,26 @@ class Program
     static void RebuildBlockedProcessNames()
     {
         _blockedProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // Note: We no longer auto-populate process names from _blockedIPs to avoid
-        // aggressive kill-loops for shared components like WebView2.
-        // Process name blocking is now an explicit, separate action if added in the future.
         foreach (var kvp in _blockedIPs)
         {
             if (!IPAddress.TryParse(kvp.Key, out _))
-                _blockedProcessNames.Add(kvp.Key); // treat non-IP key as process name
+            {
+                // Explicit process-name entry (non-IP key) → treat as a named process block
+                _blockedProcessNames.Add(kvp.Key);
+            }
+            else
+            {
+                // IP entry: if the associated process has been blocked at ANY destination IP,
+                // add it to the set so AutoEnforceBlockRules catches all future connections
+                // from that process and firewall-blocks each new IP it tries to reach.
+                // Note: this only creates new IP block rules — it never kills processes,
+                // so it is safe for shared components like WebView2.
+                if (!string.IsNullOrWhiteSpace(kvp.Value.ProcessName) &&
+                    kvp.Value.ProcessName != "Unknown")
+                {
+                    _blockedProcessNames.Add(kvp.Value.ProcessName);
+                }
+            }
         }
     }
 
@@ -1723,6 +1737,7 @@ class TcpConnectionInfo
     public bool   IsGhosted     { get; set; }
 }
 
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 static class SystemSettingsManager
 {
     public static bool IsLanguageSyncEnabled()
@@ -1948,7 +1963,7 @@ static class SystemSettingsManager
         catch (Exception ex) { Program.LogCrash($"SetShellExperienceHostEnabled: {ex.Message}"); }
     }
 
-    public static string FindWebView2Path()
+    public static string? FindWebView2Path()
     {
         try
         {
