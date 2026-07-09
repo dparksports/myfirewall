@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Security.Principal;
 using System.Windows;
 using MyFirewall.Desktop.ViewModels;
@@ -26,20 +25,14 @@ namespace MyFirewall.Desktop
                 System.IO.File.AppendAllText(crashLogPath, $"[{DateTime.Now:s}] BACKGROUND CRASH: {args.ExceptionObject}\n");
             };
 
+            // The app.manifest requests requireAdministrator, so Windows will enforce UAC
+            // elevation before this code is ever reached. This guard is a last-resort
+            // defensive check — if the token is somehow non-elevated, log it and continue
+            // so the user at least sees the UI and the "No Admin" status badge.
             if (!IsAdministrator())
             {
-                // Silent auto-elevation without the jarring MessageBox
-                if (RestartAsAdmin())
-                {
-                    Shutdown();
-                    return;
-                }
-                else
-                {
-                    // User cancelled UAC prompt or it failed.
-                    // Instead of failing silently, launch anyway in degraded mode.
-                    // The UI will show a red "No Admin" badge and ETW will fail gracefully.
-                }
+                System.IO.File.AppendAllText(crashLogPath,
+                    $"[{DateTime.Now:s}] WARNING: Process started without an elevated token despite requireAdministrator manifest. Firewall rules will fail.\n");
             }
 
             MainWindow = new MainWindow();
@@ -60,30 +53,5 @@ namespace MyFirewall.Desktop
             }
         }
 
-        private bool RestartAsAdmin()
-        {
-            var processInfo = new ProcessStartInfo
-            {
-                FileName = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "MyFirewall.Desktop.exe",
-                UseShellExecute = true,
-                Verb = "runas",
-                WorkingDirectory = Environment.CurrentDirectory
-            };
-            
-            try
-            {
-                Process.Start(processInfo);
-                return true;
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                // Win32Exception is thrown if user cancels the UAC prompt
-                return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
     }
 }
