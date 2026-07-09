@@ -8,13 +8,32 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>5.7.16</Version>
-    <AssemblyVersion>5.7.16.0</AssemblyVersion>
-    <FileVersion>5.7.16.0</FileVersion>
+    <Version>5.7.17</Version>
+    <AssemblyVersion>5.7.17.0</AssemblyVersion>
+    <FileVersion>5.7.17.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.2" />
   </ItemGroup>
+
+  <!--
+    FIX: UAC elevation lost in single-file publish.
+    When PublishSingleFile=true, dotnet's AppHost stub (.exe) does NOT embed the
+    ApplicationManifest PE resource — so Windows never sees requireAdministrator and
+    the process launches without an elevated token.
+
+    The workaround: copy app.manifest as a <ExeName>.exe.manifest sidecar next to the
+    published executable. Windows reads this file automatically (external manifest) and
+    enforces UAC elevation before launching the app.
+  -->
+  <Target Name="CopyManifestSidecar" AfterTargets="Publish">
+    <Copy
+      SourceFiles="$(MSBuildProjectDirectory)\app.manifest"
+      DestinationFiles="$(PublishDir)$(AssemblyName).exe.manifest"
+      SkipUnchangedFiles="false" />
+    <Message Importance="high"
+      Text="[UAC Fix] Copied app.manifest -> $(PublishDir)$(AssemblyName).exe.manifest" />
+  </Target>
 
 </Project>
