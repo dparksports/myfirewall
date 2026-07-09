@@ -293,7 +293,10 @@ class Program
             }
         }
 
-        /// <summary>Adds an outbound block rule for the given IP. No-ops if the rule already exists.</summary>
+        /// <summary>
+        /// Adds a paired inbound + outbound block rule for the given IP.
+        /// No-ops if the outbound rule already exists (deduplication guard).
+        /// </summary>
         public static bool AddBlockRule(string ip, string processName)
         {
             if (!IsValidIP(ip)) return false;
@@ -307,19 +310,32 @@ class Program
                     if (policy is null) { LogCrash("FirewallManager: Could not acquire HNetCfg.FwPolicy2"); return false; }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    
-                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
-                    rule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
-                    rule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
-                    rule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                    rule.RemoteAddresses = ip;
-                    rule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
-                    rule.Enabled         = true;
-                    rule.Profiles        = 7; // All profiles
+                    // Outbound block
+                    INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    outRule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
+                    outRule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
+                    outRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    outRule.RemoteAddresses = ip;
+                    outRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    outRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    outRule.Enabled         = true;
+                    outRule.Profiles        = 7; // All profiles
+                    policy.Rules.Add(outRule);
 
-                    policy.Rules.Add(rule);
+                    // Inbound block — prevents reply packets from arriving and
+                    // being counted by ETW even after the outbound rule is active.
+                    INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    inRule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}-IN";
+                    inRule.Description     = $"Auto-blocked (inbound) by TCP Monitor | process={processName}";
+                    inRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    inRule.RemoteAddresses = ip;
+                    inRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
+                    inRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    inRule.Enabled         = true;
+                    inRule.Profiles        = 7;
+                    policy.Rules.Add(inRule);
+
                     return true;
                 }
                 catch (Exception ex)
@@ -339,21 +355,36 @@ class Program
                     INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return false;
 
-                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); }    catch { }
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2-IN"); } catch { }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
-                    rule.Name = "MyFirewall-Block-WebView2";
-                    rule.Description = "Proactively blocks msedgewebview2.exe outbound network connections.";
-                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                    rule.ApplicationName = path;
-                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
-                    rule.Enabled = true;
-                    rule.Profiles = 7;
+                    // Outbound block
+                    INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    outRule.Name = "MyFirewall-Block-WebView2";
+                    outRule.Description = "Proactively blocks msedgewebview2.exe outbound network connections.";
+                    outRule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    outRule.ApplicationName = path;
+                    outRule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    outRule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    outRule.Enabled = true;
+                    outRule.Profiles = 7;
+                    policy.Rules.Add(outRule);
 
-                    policy.Rules.Add(rule);
+                    // Inbound block — stops reply packets from arriving so ETW
+                    // recv counters don't increment after the rule is in place.
+                    INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    inRule.Name = "MyFirewall-Block-WebView2-IN";
+                    inRule.Description = "Proactively blocks msedgewebview2.exe inbound network connections.";
+                    inRule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    inRule.ApplicationName = path;
+                    inRule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
+                    inRule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    inRule.Enabled = true;
+                    inRule.Profiles = 7;
+                    policy.Rules.Add(inRule);
+
                     return true;
                 }
                 catch (Exception ex)
@@ -372,9 +403,81 @@ class Program
                 {
                     INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return;
-                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); }    catch { }
+                    try { policy.Rules.Remove("MyFirewall-Block-WebView2-IN"); } catch { }
                 }
                 catch (Exception ex) { LogCrash($"RemoveWebView2NetworkBlock failed: {ex.Message}"); }
+            }
+        }
+
+        /// <summary>
+        /// Creates a paired inbound + outbound application-path-based block rule for any process.
+        /// Application-path rules are evaluated by WFP before the first packet leaves the host,
+        /// so traffic is blocked before any connection can be established — regardless of destination IP.
+        /// </summary>
+        public static bool AddAppBlockRule(string executablePath, string processName)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath)) return false;
+
+            string outName = $"{FirewallRulePrefix}-{processName}-APP-OUT";
+            string inName  = $"{FirewallRulePrefix}-{processName}-APP-IN";
+
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return false;
+
+                    try { policy.Rules.Remove(outName); } catch { }
+                    try { policy.Rules.Remove(inName);  } catch { }
+
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+
+                    INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    outRule.Name            = outName;
+                    outRule.Description     = $"App-level block (outbound) by TCP Monitor | {processName}";
+                    outRule.ApplicationName = executablePath;
+                    outRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    outRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    outRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    outRule.Enabled         = true;
+                    outRule.Profiles        = 7;
+                    policy.Rules.Add(outRule);
+
+                    INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
+                    inRule.Name            = inName;
+                    inRule.Description     = $"App-level block (inbound) by TCP Monitor | {processName}";
+                    inRule.ApplicationName = executablePath;
+                    inRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    inRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
+                    inRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    inRule.Enabled         = true;
+                    inRule.Profiles        = 7;
+                    policy.Rules.Add(inRule);
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"FirewallManager.AddAppBlockRule({processName}): {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        public static void RemoveAppBlockRule(string processName)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return;
+                    try { policy.Rules.Remove($"{FirewallRulePrefix}-{processName}-APP-OUT"); } catch { }
+                    try { policy.Rules.Remove($"{FirewallRulePrefix}-{processName}-APP-IN");  } catch { }
+                }
+                catch (Exception ex) { LogCrash($"FirewallManager.RemoveAppBlockRule({processName}): {ex.Message}"); }
             }
         }
 
@@ -417,7 +520,7 @@ class Program
             }
         }
 
-        /// <summary>Removes all TCP-Monitor block rules matching the given IP.</summary>
+        /// <summary>Removes all TCP-Monitor block rules (both directions) matching the given IP.</summary>
         public static void RemoveBlockRule(string ip)
         {
             lock (_fwLock)
@@ -432,6 +535,7 @@ class Program
                     {
                         try
                         {
+                            // Match both the outbound rule and the paired "-IN" inbound rule
                             if (r.Name.StartsWith(FirewallRulePrefix) && r.RemoteAddresses == ip)
                                 toRemove.Add(r.Name);
                         }
@@ -519,13 +623,21 @@ class Program
 
                 _session.Source.Kernel.ProcessStart += data =>
                 {
-                    if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw && data.ProcessID > 0)
+                    if (data.ProcessID <= 0) return;
+
+                    string imageName     = data.ImageFileName ?? string.Empty;
+                    string bareImageName = Path.GetFileNameWithoutExtension(imageName);
+                    bool   isWebView2    = imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase);
+
+                    if (isWebView2 && _monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
                     {
-                        string imageName = data.ImageFileName;
-                        if (imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Task.Run(() => HandleWebView2Spawned(data.ProcessID));
-                        }
+                        // WebView2: existing detailed handler — now also applies the block rule immediately
+                        Task.Run(() => HandleWebView2Spawned(data.ProcessID));
+                    }
+                    else if (!isWebView2 && _blockedProcessNames.Contains(bareImageName))
+                    {
+                        // Any other blocked process: apply app-level firewall rule before first packet
+                        Task.Run(() => HandleBlockedProcessSpawned(data.ProcessID, bareImageName));
                     }
                 };
 
@@ -611,6 +723,16 @@ class Program
                     }
                 }
 
+                // Apply firewall block the instant we have the executable path — ETW ProcessStart
+                // fires before the process typically makes its first network call, so this rule
+                // lands before any packet can leave the host.
+                if (_blockedProcessNames.Contains("msedgewebview2") &&
+                    !string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
+                {
+                    FirewallManager.ApplyWebView2NetworkBlock(executablePath);
+                    ResetConnectionsForPid(pid);
+                }
+
                 if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
                 {
                     try
@@ -661,10 +783,79 @@ class Program
             }
         }
 
+        /// <summary>
+        /// Called on ETW ProcessStart for any non-WebView2 process that is in _blockedProcessNames.
+        /// Resolves the full executable path and immediately creates an application-path firewall rule
+        /// (both inbound and outbound) so zero packets escape before the block is effective.
+        /// </summary>
+        private void HandleBlockedProcessSpawned(int pid, string processName)
+        {
+            lock (_lock)
+            {
+                if (_proactiveEvaluatedPids.Contains(pid)) return;
+                _proactiveEvaluatedPids.Add(pid);
+            }
+
+            try
+            {
+                string executablePath = "N/A";
+                IntPtr hProcess = IntPtr.Zero;
+                try
+                {
+                    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid);
+                    if (hProcess == IntPtr.Zero)
+                        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+
+                    if (hProcess != IntPtr.Zero)
+                    {
+                        var sb = new System.Text.StringBuilder(1024);
+                        int size = sb.Capacity;
+                        if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                            executablePath = sb.ToString();
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (hProcess != IntPtr.Zero) CloseHandle(hProcess);
+                }
+
+                if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
+                {
+                    bool applied = FirewallManager.AddAppBlockRule(executablePath, processName);
+                    if (applied)
+                    {
+                        ResetConnectionsForPid(pid);
+                        OnProactiveAlert?.Invoke(
+                            $"PROACTIVE BLOCK: [bold red]{Markup.Escape(processName)}[/] " +
+                            $"spawned (PID {pid}) — app-level firewall rule applied instantly.\n" +
+                            $"Path: [grey]{Markup.Escape(executablePath)}[/]");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(EtwLogFilePath, $"HandleBlockedProcessSpawned error for PID {pid}: {ex}\n");
+            }
+        }
+
         public (long Sent, long Received) GetStats(int pid)
         {
             lock (_lock)
                 return (_bytesSent.GetValueOrDefault(pid), _bytesReceived.GetValueOrDefault(pid));
+        }
+
+        /// <summary>
+        /// Clears the accumulated Sent/Recv counters for a PID so the UI
+        /// shows zero after a block rule is applied rather than stale pre-block totals.
+        /// </summary>
+        public void ResetStats(int pid)
+        {
+            lock (_lock)
+            {
+                _bytesSent.Remove(pid);
+                _bytesReceived.Remove(pid);
+            }
         }
 
         public void Dispose() => Stop();
@@ -734,6 +925,7 @@ class Program
 
         LoadAllData();
         RebuildBlockedProcessNames();
+        ApplyProactiveProcessBlocks(); // Block processes already running at launch, before ETW starts
         _etwTracker = new EtwNetworkTracker();
         _etwTracker.OnProactiveAlert = alertMsg =>
         {
@@ -1248,7 +1440,12 @@ class Program
             if (!added)
                 AnsiConsole.MarkupLine($"[yellow]Note: Firewall rule for {ip} may already exist or failed — check {CrashLogFile}[/]");
             else
+            {
                 ResetConnectionsToIp(ip); // Sever any existing active connections
+                // Also kill by PID for any connection whose process mapping may be stale
+                foreach (var c in _lastConnections.Where(c => c.RemoteIP == ip))
+                    ResetConnectionsForPid(c.PID);
+            }
         }
 
         foreach (var ip in newlyUnblocked)
@@ -1286,6 +1483,7 @@ class Program
                 RebuildBlockedProcessNames();
                 SaveBlockList();
                 ResetConnectionsToIp(conn.RemoteIP); // Sever any existing active connections
+                ResetConnectionsForPid(conn.PID);     // Also close by PID in case IP mapping is stale
 
                 lock (_alertLock)
                 {
@@ -1479,6 +1677,67 @@ class Program
         catch (Exception ex)
         {
             LogCrash($"ResetConnectionsToIp: {ex.Message}");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
+    /// <summary>
+    /// Tears down all active TCP connections owned by a specific PID.
+    /// Complements ResetConnectionsToIp (destination-based) — use this immediately after
+    /// applying an app-level or startup block so sockets that pre-date the rule are closed.
+    /// </summary>
+    static void ResetConnectionsForPid(int pid)
+    {
+        if (pid <= 0) return;
+
+        int bufferSize = 0;
+        GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL);
+        if (bufferSize <= 0) return;
+
+        IntPtr ptr = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            if (GetExtendedTcpTable(ptr, ref bufferSize, true, AF_INET, TCP_TABLE_OWNER_PID_ALL) != 0) return;
+
+            int    rowCount = Marshal.ReadInt32(ptr);
+            IntPtr rowPtr   = ptr + 4;
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                try
+                {
+                    var row = Marshal.PtrToStructure<MIB_TCPROW_OWNER_PID>(rowPtr);
+                    rowPtr += Marshal.SizeOf<MIB_TCPROW_OWNER_PID>();
+
+                    if ((int)row.dwOwningPid != pid) continue;
+                    if (row.dwState != TCP_STATE_ESTABLISHED && row.dwState != TCP_STATE_CLOSE_WAIT
+                        && row.dwState != TCP_STATE_TIME_WAIT) continue;
+
+                    MIB_TCPROW resetRow = new MIB_TCPROW
+                    {
+                        dwState      = MIB_TCP_STATE_DELETE_TCB,
+                        dwLocalAddr  = row.dwLocalAddr,
+                        dwLocalPort  = row.dwLocalPort,
+                        dwRemoteAddr = row.dwRemoteAddr,
+                        dwRemotePort = row.dwRemotePort
+                    };
+
+                    uint res = SetTcpEntry(ref resetRow);
+                    if (res != 0)
+                        LogCrash($"ResetConnectionsForPid: SetTcpEntry for PID {pid} failed (err {res})");
+                }
+                catch (Exception ex)
+                {
+                    LogCrash($"ResetConnectionsForPid row: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogCrash($"ResetConnectionsForPid: {ex.Message}");
         }
         finally
         {
@@ -1722,6 +1981,69 @@ class Program
                     _blockedProcessNames.Add(kvp.Value.ProcessName);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs once at startup, immediately after RebuildBlockedProcessNames.
+    /// For every process name in the blocked set, finds running instances, resolves
+    /// their executable paths, and applies app-level firewall rules + tears down
+    /// existing TCP sockets — so processes already running at launch are blocked
+    /// before the ETW session even starts.
+    /// </summary>
+    static void ApplyProactiveProcessBlocks()
+    {
+        foreach (string procName in _blockedProcessNames.ToList())
+        {
+            try
+            {
+                var processes = Process.GetProcessesByName(procName);
+                foreach (var proc in processes)
+                {
+                    try
+                    {
+                        string executablePath = "N/A";
+                        IntPtr hProcess = OpenProcess(
+                            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION, false, proc.Id);
+                        if (hProcess == IntPtr.Zero)
+                            hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, proc.Id);
+
+                        if (hProcess != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                var sb   = new System.Text.StringBuilder(1024);
+                                int size = sb.Capacity;
+                                if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                                    executablePath = sb.ToString();
+                            }
+                            finally { CloseHandle(hProcess); }
+                        }
+
+                        if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
+                        {
+                            bool applied = procName.Equals("msedgewebview2", StringComparison.OrdinalIgnoreCase)
+                                ? FirewallManager.ApplyWebView2NetworkBlock(executablePath)
+                                : FirewallManager.AddAppBlockRule(executablePath, procName);
+
+                            if (applied)
+                            {
+                                ResetConnectionsForPid(proc.Id);
+                                lock (_alertLock)
+                                {
+                                    _alertLog.Add($"[{DateTime.Now:HH:mm:ss}] [red bold]STARTUP BLOCK:[/] " +
+                                        $"{Markup.Escape(procName)} (PID {proc.Id}) was already running — " +
+                                        $"app-level firewall rule applied immediately.");
+                                    if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex) { LogCrash($"ApplyProactiveProcessBlocks [{procName}]: {ex.Message}"); }
+                    finally { proc.Dispose(); }
+                }
+            }
+            catch (Exception ex) { LogCrash($"ApplyProactiveProcessBlocks: {ex.Message}"); }
         }
     }
 
