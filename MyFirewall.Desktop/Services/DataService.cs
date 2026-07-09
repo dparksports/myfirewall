@@ -74,8 +74,8 @@ namespace MyFirewall.Desktop.Services
                     {
                         if (string.IsNullOrWhiteSpace(line)) continue;
                         var parts = line.Split('|');
-                        string ip = parts[0].Trim();
-                        if (IPAddress.TryParse(ip, out _))
+                        string key = parts[0].Trim();
+                        if (!string.IsNullOrEmpty(key))
                         {
                             string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
                             DateTime timestamp = DateTime.Now;
@@ -83,7 +83,7 @@ namespace MyFirewall.Desktop.Services
                             {
                                 timestamp = dt;
                             }
-                            blocked[ip] = new BlockedIPMetadata { Application = app, Timestamp = timestamp };
+                            blocked[key] = new BlockedIPMetadata { Application = app, Timestamp = timestamp };
                         }
                     }
                 }

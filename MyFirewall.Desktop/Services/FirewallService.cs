@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MyFirewall.Desktop.Services
@@ -90,18 +90,20 @@ namespace MyFirewall.Desktop.Services
                     if (RuleExistsUnsafe(policy, ip, processName)) return true;
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
-                    rule.Name = $"{FirewallRulePrefix}-{processName}-{ip}";
-                    rule.Description = $"Auto-blocked by TCP Monitor | application={processName}";
-                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                    rule.RemoteAddresses = ip;
-                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
-                    rule.Enabled = true;
-                    rule.Profiles = 7; // All profiles
-
-                    policy.Rules.Add(rule);
+                    // ROOT CAUSE FIX: Windows Firewall COM API throws E_INVALIDARG
+                    // ("Value does not fall within the expected range") when Protocol=ANY(256)
+                    // is combined with a specific RemoteAddresses value. The fix is to create
+                    // separate TCP and UDP outbound block rules for the target IP, which the
+                    // API accepts without error.
+                    AddRuleForProtocol(policy, ruleType, ip, processName,
+                        NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_TCP, NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT);
+                    AddRuleForProtocol(policy, ruleType, ip, processName,
+                        NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_UDP, NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT);
+                    AddRuleForProtocol(policy, ruleType, ip, processName,
+                        NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_TCP, NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN);
+                    AddRuleForProtocol(policy, ruleType, ip, processName,
+                        NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_UDP, NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN);
 
                     // Fix #7: Invalidate cache after a successful add.
                     _cachedRuleCount = -1;
@@ -113,6 +115,36 @@ namespace MyFirewall.Desktop.Services
                     return false;
                 }
             }
+        }
+
+        private static void AddRuleForProtocol(
+            INetFwPolicy2 policy,
+            Type ruleType,
+            string ip,
+            string processName,
+            NET_FW_IP_PROTOCOL protocol,
+            NET_FW_RULE_DIRECTION direction)
+        {
+            string protoTag = protocol == NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_TCP ? "TCP" : "UDP";
+            string dirTag   = direction == NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT ? "OUT" : "IN";
+            string name     = $"{FirewallRulePrefix}-{processName}-{ip}-{protoTag}-{dirTag}";
+
+            // Avoid adding a duplicate rule.
+            try { if (policy.Rules.Item(name) != null) return; } catch { }
+
+            dynamic rule = Activator.CreateInstance(ruleType)!;
+            rule.Name            = name;
+            // FIXED: The Windows Firewall API throws E_INVALIDARG on Add() if Description contains '|'
+            rule.Description     = $"Auto-blocked by TCP Monitor, application={processName}, {protoTag} {dirTag}";
+            rule.Protocol        = (int)protocol;
+            rule.RemoteAddresses = ip;
+            rule.Direction       = (int)direction;
+            rule.Action          = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+            rule.Enabled         = true;
+            rule.Profiles        = 7;
+
+            dynamic dynPolicy = policy;
+            dynPolicy.Rules.Add(rule);
         }
 
         public void RemoveBlockRule(string ip)
@@ -189,21 +221,22 @@ namespace MyFirewall.Desktop.Services
                     INetFwPolicy2? policy = GetPolicy();
                     if (policy is null) return false;
 
-                    try { policy.Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
+                    try { ((dynamic)policy).Rules.Remove("MyFirewall-Block-WebView2"); } catch { }
 
                     var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
-                    INetFwRule rule = (INetFwRule)Activator.CreateInstance(ruleType)!;
 
-                    rule.Name = "MyFirewall-Block-WebView2";
-                    rule.Description = "Proactively blocks msedgewebview2.exe outbound network connections.";
-                    rule.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                    // Use dynamic (IDispatch) to avoid .NET 8/10 vtable marshalling failures.
+                    dynamic rule = Activator.CreateInstance(ruleType)!;
+                    rule.Name            = "MyFirewall-Block-WebView2";
+                    rule.Description     = "Proactively blocks msedgewebview2.exe outbound network connections.";
+                    rule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY; // OK: no RemoteAddresses set
                     rule.ApplicationName = path;
-                    rule.Direction = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
-                    rule.Action = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
-                    rule.Enabled = true;
-                    rule.Profiles = 7;
+                    rule.Direction       = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                    rule.Action          = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                    rule.Enabled         = true;
+                    rule.Profiles        = 7;
 
-                    policy.Rules.Add(rule);
+                    ((dynamic)policy).Rules.Add(rule);
                     _cachedRuleCount = -1;
                     return true;
                 }
@@ -212,6 +245,75 @@ namespace MyFirewall.Desktop.Services
                     _logError($"ApplyWebView2NetworkBlock failed: {ex.Message}");
                     return false;
                 }
+            }
+        }
+
+        public bool AddBlockProcessRule(string appName, string executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath) || executablePath == "N/A") return false;
+
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return false;
+                    
+                    var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule", throwOnError: true)!;
+                    
+                    string outName = $"{FirewallRulePrefix}-APP-{appName}-OUT";
+                    try { if (policy.Rules.Item(outName) != null) {} } catch {
+                        dynamic ruleOut = Activator.CreateInstance(ruleType)!;
+                        ruleOut.Name = outName;
+                        ruleOut.Description = $"Auto-blocked process {appName} by TCP Monitor";
+                        ruleOut.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                        ruleOut.ApplicationName = executablePath;
+                        ruleOut.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
+                        ruleOut.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                        ruleOut.Enabled = true;
+                        ruleOut.Profiles = 7;
+                        ((dynamic)policy).Rules.Add(ruleOut);
+                    }
+
+                    string inName = $"{FirewallRulePrefix}-APP-{appName}-IN";
+                    try { if (policy.Rules.Item(inName) != null) {} } catch {
+                        dynamic ruleIn = Activator.CreateInstance(ruleType)!;
+                        ruleIn.Name = inName;
+                        ruleIn.Description = $"Auto-blocked process {appName} by TCP Monitor";
+                        ruleIn.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
+                        ruleIn.ApplicationName = executablePath;
+                        ruleIn.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
+                        ruleIn.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
+                        ruleIn.Enabled = true;
+                        ruleIn.Profiles = 7;
+                        ((dynamic)policy).Rules.Add(ruleIn);
+                    }
+
+                    _cachedRuleCount = -1;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logError($"FirewallService.AddBlockProcessRule({appName}): {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        public void RemoveBlockProcessRule(string appName)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return;
+                    
+                    try { policy.Rules.Remove($"{FirewallRulePrefix}-APP-{appName}-OUT"); } catch { }
+                    try { policy.Rules.Remove($"{FirewallRulePrefix}-APP-{appName}-IN"); } catch { }
+                    _cachedRuleCount = -1;
+                }
+                catch (Exception ex) { _logError($"FirewallService.RemoveBlockProcessRule({appName}): {ex.Message}"); }
             }
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Security.Principal;
 using System.Windows;
 using MyFirewall.Desktop.ViewModels;
@@ -25,14 +26,43 @@ namespace MyFirewall.Desktop
                 System.IO.File.AppendAllText(crashLogPath, $"[{DateTime.Now:s}] BACKGROUND CRASH: {args.ExceptionObject}\n");
             };
 
-            // The app.manifest requests requireAdministrator, so Windows will enforce UAC
-            // elevation before this code is ever reached. This guard is a last-resort
-            // defensive check — if the token is somehow non-elevated, log it and continue
-            // so the user at least sees the UI and the "No Admin" status badge.
+            // FIX: Self-elevate if not running as Administrator.
+            // The app.manifest declares requireAdministrator, but this is NOT reliable
+            // in all launch scenarios (parent process is non-elevated, Task Scheduler,
+            // certain deployment tools, etc.). When the token is non-elevated, re-launch
+            // the EXE with Verb="runas" to trigger an explicit UAC prompt, then exit
+            // this non-elevated instance. This matches the CLI's RestartAsAdmin() pattern.
             if (!IsAdministrator())
             {
-                System.IO.File.AppendAllText(crashLogPath,
-                    $"[{DateTime.Now:s}] WARNING: Process started without an elevated token despite requireAdministrator manifest. Firewall rules will fail.\n");
+                try
+                {
+                    string exePath = Process.GetCurrentProcess().MainModule?.FileName
+                                     ?? System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MyFirewall.Desktop.exe");
+
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName         = exePath,
+                        UseShellExecute  = true,
+                        Verb             = "runas",
+                        WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // User cancelled UAC prompt or elevation failed — show a message and exit.
+                    System.IO.File.AppendAllText(crashLogPath,
+                        $"[{DateTime.Now:s}] ELEVATION FAILED: {ex.Message}\n");
+                    MessageBox.Show(
+                        "MyFirewall requires Administrator privileges to manage firewall rules.\n\n" +
+                        "Please right-click the application and select 'Run as administrator'.",
+                        "MyFirewall - Elevation Required",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+
+                // Shut down this non-elevated instance either way.
+                Shutdown();
+                return;
             }
 
             MainWindow = new MainWindow();

@@ -1,4 +1,4 @@
-﻿<Window x:Class="MyFirewall.Desktop.MainWindow"
+<Window x:Class="MyFirewall.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:MyFirewall.Desktop.ViewModels"
@@ -246,6 +246,9 @@
                                             <MenuItem Header="🛑  Block this address"
                                                       Command="{Binding PlacementTarget.Tag.BlockIPCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding}"/>
+                                            <MenuItem Header="🛑  Block this application"
+                                                      Command="{Binding PlacementTarget.Tag.BlockProcessCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding}" />
                                             <MenuItem Header="👁  Hide this app"
                                                       Command="{Binding PlacementTarget.Tag.IgnoreAppCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding ApplicationName}"/>

@@ -234,6 +234,7 @@ namespace MyFirewall.Desktop.ViewModels
 
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
+        public RelayCommand<object> BlockProcessCommand { get; }
         public RelayCommand<string> UnblockIPCommand { get; }
         public RelayCommand<string> IgnoreAppCommand { get; }
         public RelayCommand<string> UnignoreAppCommand { get; }
@@ -277,6 +278,7 @@ namespace MyFirewall.Desktop.ViewModels
 
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
             BlockIPCommand         = new RelayCommand<object>(ExecuteBlockIP);
+            BlockProcessCommand    = new RelayCommand<object>(ExecuteBlockProcess);
             UnblockIPCommand       = new RelayCommand<string>(ExecuteUnblockIP);
             IgnoreAppCommand       = new RelayCommand<string>(ExecuteIgnoreApp);
             UnignoreAppCommand     = new RelayCommand<string>(ExecuteUnignoreApp);
@@ -535,13 +537,47 @@ namespace MyFirewall.Desktop.ViewModels
             }
         }
 
+        private void ExecuteBlockProcess(object? parameter)
+        {
+            if (parameter is not ConnectionInfo conn) return;
+
+            string app  = conn.ApplicationName;
+            string path = conn.ExecutablePath;
+
+            if (string.IsNullOrWhiteSpace(app) || app == "Unknown" || string.IsNullOrWhiteSpace(path) || path == "N/A")
+            {
+                AddAlert("Cannot block application: executable path unknown.", AlertSeverity.Warning);
+                return;
+            }
+
+            if (!_blockedIPsDict.ContainsKey(app))
+            {
+                if (_firewallService.AddBlockProcessRule(app, path))
+                {
+                    _blockedIPsDict[app] = new BlockedIPMetadata { Application = path, Timestamp = DateTime.Now };
+                    _dataService.SaveBlocked(_blockedIPsDict);
+                    SyncObservables();
+                    Timer_Tick(null, EventArgs.Empty);
+                    AddAlert($"Blocked application {app}", AlertSeverity.Warning);
+                }
+                else
+                {
+                    AddAlert($"Failed to block {app}. Ensure app is running as Administrator.", AlertSeverity.Critical);
+                }
+            }
+        }
+
         private void ExecuteUnblockIP(string? ip)
         {
             if (string.IsNullOrWhiteSpace(ip)) return;
 
             if (_blockedIPsDict.Remove(ip))
             {
-                _firewallService.RemoveBlockRule(ip);
+                if (System.Net.IPAddress.TryParse(ip, out _))
+                    _firewallService.RemoveBlockRule(ip);
+                else
+                    _firewallService.RemoveBlockProcessRule(ip);
+
                 _dataService.SaveBlocked(_blockedIPsDict);
                 SyncObservables();
                 AddAlert($"Unblocked {ip}", AlertSeverity.Info);

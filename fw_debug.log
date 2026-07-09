@@ -1,0 +1,10 @@
+--- AddRuleForProtocol: 23.217.118.213 NET_FW_IP_PROTOCOL_TCP NET_FW_RULE_DIR_OUT ---
+Name set
+Desc set
+Protocol set
+RemoteAddresses set
+Direction set
+Action set
+Enabled set
+Profiles set
+Add fail: Value does not fall within the expected range.
