@@ -21,7 +21,7 @@ namespace MyFirewall.Desktop.Services
 
     public class NetworkMonitorService : IDisposable
     {
-        private static readonly string SessionName = KernelTraceEventParser.KernelSessionName;
+        private static readonly string SessionName = "MyFirewallSession";
         private TraceEventSession? _session;
         private readonly Dictionary<int, long> _bytesSent = new();
         private readonly Dictionary<int, long> _bytesReceived = new();
