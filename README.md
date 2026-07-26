@@ -1,165 +1,128 @@
-# 🛡️ MyFirewall: Advanced Kernel-Level TCP Monitor & WFP Firewall
+# 🛡️ MyFirewall v5.7.23
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20%2F%20Server-blue.svg)](https://microsoft.com/windows)
-[![Framework](https://img.shields.io/badge/Framework-.NET%2010.0-purple.svg)](https://dotnet.microsoft.com/download)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-[![Build](https://img.shields.io/badge/Build-Self--contained%20x64-orange.svg)](https://github.com/dparksports/myfirewall)
-
-**MyFirewall** is a high-performance, enterprise-grade network security platform for Windows. It seamlessly bridges real-time OS kernel telemetry with proactive, zero-overhead Windows Filtering Platform (WFP) firewall enforcement. 
-
-By capturing TCP/IP socket events directly at the kernel boundary via Event Tracing for Windows (ETW), reconstructing dynamic process lineage trees, and employing native in-process COM bindings, MyFirewall delivers instantaneous traffic blocking and deep observability with near-zero performance overhead.
+> **Ultra-Low Latency Windows Network Isolation & Process Security Suite**  
+> Built with **.NET 10.0**, Native Windows Firewall COM (`INetFwPolicy2`), Real-Time Kernel Event Tracing (ETW), **Spectre.Console CLI**, and a Dark-Theme **WPF Desktop App**.
 
 ---
 
-## 📊 System Architecture & Infographic
+![MyFirewall Architecture & System Overview](assets/infographic.png)
 
-Below is the high-fidelity system architecture diagram illustrating the real-time event pipeline, state resolution cache, and low-latency COM enforcement engine:
+---
 
-![MyFirewall Architecture Infographic](assets/new_infographic.svg)
+## 🌟 Key Features
 
-<details>
-  <summary>🔍 Click to expand/collapse the interactive Mermaid source diagram</summary>
+### ⚡ Real-Time Kernel Event Tracing (ETW)
+* **Instant Process Interception**: Listens directly to Windows Kernel `ProcessStart` and network events via `Microsoft.Diagnostics.Tracing.TraceEvent`.
+* **Zero-Escape Enforcement**: Applies application-level firewall rules the millisecond a monitored executable spawns—before out-of-process network packets can leave the host adapter.
+* **Ghost Connection Tracking**: Automatically detects and marks closed sockets in WPF with soft opacity until Windows TCP state teardown completes.
+
+### 🧱 Native COM Windows Firewall Engine
+* **Direct COM Interop**: Interacts natively with `HNetCfg.FwPolicy2` and `HNetCfg.FWRule` without relying on slow external `powershell.exe` subprocesses.
+* **Decoupled Network Isolation**: Severs restricted IP endpoints while preserving shared process integrity (preventing infinite spawn-kill loops for components like Microsoft Edge WebView2).
+* **Proactive WebView2 Network Shielding**: One-click toggle to isolate `msedgewebview2.exe` network access dynamically across registered installation paths.
+
+### 🖥️ Dual User Interfaces (CLI & Desktop)
+* **Spectre.Console Terminal UI**: Rich terminal dashboard featuring live connection tables, color-coded ETW status indicators, thread-safe alert logs, and quick interactive keybindings (`Q`, `K`, `B`, `I`, `P`, `S`, `T`, `L`, `R`).
+* **WPF Dark-Mode Desktop App**: Premium WPF dashboard with status color brushes, real-time search/filtering, process ancestry graphs, digital signature verification, and system toggle controls.
+
+---
+
+## 🏗️ Architecture & Data Flow
 
 ```mermaid
 graph TD
-    %% Styling
-    classDef kernel fill:#1a1c23,stroke:#ff5555,stroke-width:2px,color:#fff;
-    classDef core fill:#1a1c23,stroke:#8be9fd,stroke-width:2px,color:#fff;
-    classDef ui fill:#1a1c23,stroke:#ffb86c,stroke-width:2px,color:#fff;
-    classDef sys fill:#1a1c23,stroke:#50fa7b,stroke-width:2px,color:#fff;
-
-    subgraph OS_Kernel [Windows Kernel Space (ETW)]
-        A[TCP/IP Network Traffic] -->|Socket Bind/Connect/Close| B(Kernel ETW Provider: Microsoft-Windows-Kernel-Network)
-        C[Process Lifecycles] -->|Process Create/Exit Events| D(System Process Monitor)
+    subgraph Kernel & OS Layer
+        Kernel["Windows Kernel Event Tracing (ETW)"]
+        WinFW["Windows Firewall Engine (INetFwPolicy2)"]
     end
 
-    subgraph App_Core [MyFirewall Engine - .NET 10.0 Core]
-        B -->|Real-time Event Stream| E[NetworkMonitorService]
-        D -->|Lineage Updates| F[ProcessMetadataService & Ancestry Tree]
-        
-        E -->|Port Correlation| G[(Socket History Cache)]
-        G -->|Resolve Ghost PIDs| H[Connection/Process Correlator]
-        F -->|Map Lineage Trees| H
-        
-        H -->|Threat Assessment| I[Threat Intelligence Analyzer]
-        I -->|Digital Signatures| J[Authenticode Validator]
+    subgraph Core Monitoring Engine
+        Tracker["EtwNetworkTracker"]
+        GeoService["GeoIP & Domain Cache Service"]
+        FwManager["FirewallManager (Native COM)"]
     end
 
-    subgraph App_Frontends [Interactive Frontends]
-        H & I -->|Smart-Diff Stream| K[WPF Desktop Application]
-        H & I -->|Console Dashboard| L[Interactive Console CLI]
-        
-        K -->|Anti-Flicker Grid| K_Grid[WPF Smart-Diffing Grid & Ancestry Drawer]
-        L -->|Live Keyboard Controls| L_CLI[Spectre.Console Dashboard & Overlays]
+    subgraph User Interfaces
+        CLI["Spectre.Console CLI App"]
+        WPF["WPF Desktop Dashboard"]
     end
 
-    subgraph Enforcement [Zero-Overhead Enforcement Layer]
-        K_Grid & L_CLI -->|Rule Registration| M[FirewallService COM Interop]
-        M -->|Direct API: HNetCfg.FwPolicy2| N(Windows Filtering Platform WFP)
-        N -->|Hardware-Level Blocking| A
-    end
-
-    class B,D kernel;
-    class E,F,G,H,I,J core;
-    class K,L,K_Grid,L_CLI ui;
-    class M,N sys;
-```
-
-</details>
-
----
-
-## 🌟 Core Technical Innovations
-
-### 1. ⚡ High-Frequency Kernel Telemetry (ETW)
-Unlike user-mode polling or socket hooking, MyFirewall hooks directly into the Windows Kernel ETW subsystem, monitoring the `Microsoft-Windows-Kernel-Network` and `Microsoft-Windows-Kernel-Process` sessions. This allows the application to ingest millions of TCP connection events (Connect, Accept, Bind, Close) and process lifecycles (Create, Exit) in real-time with virtually zero CPU or memory footprint.
-
-### 2. 🔌 Direct WFP COM In-Process Binding
-Traditional firewalls often invoke heavy external command-line tools like `netsh.exe` or slow PowerShell cmdlets to register blocking rules, introducing 500ms+ latencies. MyFirewall uses custom C# COM wrappers for `INetFwPolicy2` and `INetFwRules` (`HNetCfg.FwPolicy2` API), interacting directly with the native Windows Filtering Platform in-process. Rules are registered and enforced in less than 1 millisecond.
-
-### 3. 🌳 Deep Process Ancestry Tree Reconstruction
-Understanding the origin of a connection is vital for threat analysis. When an application generates a network connection, MyFirewall traces up the system-wide process spawning lineage (e.g., `services.exe` ↳ `svchost.exe` ↳ `explorer.exe` ↳ `cmd.exe` ↳ `curl.exe`). It preserves ancestral lines in memory even after intermediate parent processes have exited.
-
-### 4. 👻 PID 0 Sockets Ghosting Correction
-During socket closure, Windows frequently reassigns local socket ownership to `PID 0` (Idle) or `Unknown`. To prevent this loss of telemetry, MyFirewall maintains a fast, thread-safe Active Socket History Cache. When a connection terminates, MyFirewall performs historical back-tracing to correctly identify and log the originating executable.
-
-### 5. 🔍 Authenticode Digital Signature Validation
-Every process initiating a network event undergoes on-demand digital signature validation. The engine checks the Authenticode certificate structure of the target executable, verifying its publisher, integrity, and trust level, instantly alerting the operator to unsigned or path-masqueraded binaries.
-
-### 6. 🖥️ WPF Graphical & Spectre.Console CLI Interfaces
-Choose between two high-fidelity frontends designed for real-time responsiveness:
-*   **WPF Desktop GUI**: Includes anti-flicker Smart-Diffing grids (updating only changed rows to avoid rendering thread locks) and a slide-out Process Lineage details drawer.
-*   **Spectre.Console CLI**: A lightweight keyboard-driven terminal dashboard supporting instant blocking, interactive killing, and detailed diagnostic overlays.
-
----
-
-## 📥 Downloads & Installation
-
-MyFirewall is packaged as fully self-contained, high-performance Windows x64 binaries that run without requiring any external .NET Runtime installation:
-
-| Package | Execution Mode | Target Platform | Description |
-| :--- | :--- | :--- | :--- |
-| `release_cli_win_x64.zip` | Keyboard-driven terminal client | Windows x64 (No .NET required) | Fast, responsive CLI ideal for remote servers and terminal environments. |
-| `release_desktop_win_x64.zip` | WPF Graphical Dashboard | Windows x64 (No .NET required) | Rich graphical dashboard featuring interactive lineage drawers and context menus. |
-
-### Integrity Verification
-
-To verify the integrity of your downloaded package, execute the following command in PowerShell to compute and verify the SHA-256 checksum:
-
-```powershell
-Get-FileHash .\release_desktop_win_x64.zip -Algorithm SHA256
+    Kernel -->|ProcessStart & Socket Events| Tracker
+    Tracker -->|Tracked Connections| GeoService
+    GeoService -->|Enriched Metadata| CLI
+    GeoService -->|Enriched Metadata| WPF
+    CLI -->|User Block/Unblock Actions| FwManager
+    WPF -->|User Block/Unblock Actions| FwManager
+    FwManager -->|Native COM Rules| WinFW
 ```
 
 ---
 
-## 📖 Operational Guide
+## 🎮 CLI Terminal Controls
 
-> [!WARNING]
-> Because MyFirewall interacts directly with OS kernel telemetry (ETW) and native firewall interfaces (WFP), both the CLI and Desktop clients must be run with **Administrator privileges (UAC elevated)**.
-
-### Option A: WPF Graphical Dashboard (`MyFirewall.Desktop.exe`)
-1. Launch `MyFirewall.Desktop.exe` as Administrator.
-2. View real-time connection telemetry on the main grid, complete with PID, Process Name, Destination IP, Ports, and Geo-IP information.
-3. Select any connection row to slide open the **Process Ancestry Drawer**, visualizing the full lineage tree of how that process was spawned.
-4. Right-click any row to open the context-action menu:
-    *   **Block Remote IP**: Adds a native WFP block rule for the destination IP address.
-    *   **Ignore Process**: Safely filters the process out from active active UI grids.
-    *   **Kill Process Tree**: Recursively terminates the process and its descendants.
-
-### Option B: Interactive Command Line (`MyFirewall.exe`)
-Launch `MyFirewall.exe` as Administrator to start the live-monitoring terminal dashboard. Control the console dynamically using live keyboard hotkeys:
+When running `MyFirewall.exe` (CLI), press any of the following keys for instant action:
 
 | Key | Action | Description |
-| :---: | :--- | :--- |
-| **`Q`** | **Exit Application** | Safely detaches the kernel ETW tracing session and closes the client. |
-| **`K`** | **Interactive Kill** | Terminate any active process instantly by its PID or Executable Name. |
-| **`B`** | **Block IP Manager** | View, register, and delete active Windows Filtering Platform IP block rules. |
-| **`I`** | **Ignore Process Filter** | Manage application filtering rules to hide benign process traffic. |
-| **`P`** | **Inspect Signature** | Verify Authenticode digital signatures, certificate chains, and trust paths. |
-| **`L`** | **Toggle Details** | Show or hide active firewall rules and system statistics at the bottom of the dashboard. |
-| **`R`** | **Restore Firewall** | Disable all active firewall rules and restore only the explicit Chrome block rule. |
-| **`H`** | **Interactive Help** | Slide open the interactive keyboard help modal overlay. |
+| :--- | :--- | :--- |
+| **`Q`** | **Quit** | Gracefully stop ETW tracing and exit the CLI application. |
+| **`K`** | **Kill Process** | Interactively select and terminate a process and its child tree. |
+| **`B`** | **Manage Blocked IPs** | Add or remove custom IPv4/IPv6 outbound block rules. |
+| **`I`** | **Ignore Process** | Exclude trusted applications from alert monitoring. |
+| **`P`** | **Process Details** | View detailed digital signatures, executable paths, and parent PIDs. |
+| **`S`** | **System Settings** | Toggle Windows Search, Widgets, Language Sync, and Hosts configuration. |
+| **`T`** | **Toggle Strategy** | Switch threat intel mode between *Connection-Driven* and *ProcessStart ETW*. |
+| **`L`** | **Toggle Lists** | Expand/collapse extra tables (Blocked IPs, Ignored Procs, Domain Cache). |
+| **`R`** | **Restore Rules** | Reset and re-apply clean firewall rules. |
+| **`H / F1`** | **Help Screen** | Open full keyboard shortcut guide and system status summary. |
 
 ---
 
-## ⚙️ Compilation & Build from Source
+## 💻 WPF Desktop Dashboard
 
-To compile MyFirewall from source, you must have the **.NET 10.0 SDK** installed on Windows.
+The WPF Desktop client (`MyFirewall.Desktop.exe`) offers a visual control center:
 
-### Build the CLI Application
-To publish a completely self-contained, high-performance single-file CLI executable:
+- **Live Data Grid**: Sort and search active TCP connections by PID, Process Name, Destination IP, Remote Port, Country, and Bandwidth.
+- **Visual Status Badges**: High-visibility color indicators for `Allowed`, `Blocked`, and `Ghosted` connection states.
+- **Process Intelligence**: Double-click any row to view parent process ancestry, file creation timestamps, and digital certificate validation.
+- **One-Click Toggles**: Quickly enable/disable WebView2 network isolation or system telemetry options.
+
+---
+
+## 📦 Build & Installation
+
+### Prerequisites
+- **Windows 10 / 11** (64-bit)
+- **.NET 10.0 SDK** (or .NET 10.0 Desktop Runtime)
+- **Administrator Privileges** (Required for ETW kernel tracing and Windows Firewall COM operations)
+
+### Building from Source
+
 ```powershell
-dotnet publish MyFirewall.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o ./publish/cli
-```
+# Clone the repository
+git clone https://github.com/dparksports/myfirewall.git
+cd myfirewall
 
-### Build the WPF Desktop Application
-To publish a completely self-contained, high-performance desktop executable:
-```powershell
-dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o ./publish/desktop
+# Build the CLI version
+dotnet build MyFirewall.csproj -c Release
+
+# Build the WPF Desktop version
+dotnet build MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release
+
+# Publish self-contained release builds
+dotnet publish MyFirewall.csproj -c Release -o ./release_cli
+dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -o ./release_desktop
 ```
 
 ---
 
-## 📄 License
+## 🏷️ Release History
 
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for complete details.
+### **v5.7.23** *(Latest)*
+- **Spectre.Console Stability Fix**: Wrapped alert log outputs with `Markup.Escape()` to eliminate ANSI markup parsing crashes on timestamp brackets (e.g. `[14:22:20]`).
+- **WPF Binding Protection**: Ensured all read-only model properties (`PortDisplay`) use `Mode=OneWay` bindings.
+- **Updated Release Archives**: Clean Release builds published for both CLI and Desktop editions (`MyFirewall-CLI-v5.7.23.zip`, `MyFirewall-Desktop-v5.7.23.zip`).
+
+---
+
+## 📜 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
