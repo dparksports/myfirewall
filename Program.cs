@@ -1040,7 +1040,7 @@ class Program
             {
                 AnsiConsole.MarkupLine("[bold red on black] ⚠  AUTO-BLOCK ALERTS [/]");
                 foreach (var alert in _alertLog.TakeLast(5))
-                    AnsiConsole.MarkupLine(alert);
+                    AnsiConsole.MarkupLine(Markup.Escape(alert));
                 AnsiConsole.Write(new Rule());
             }
         }
