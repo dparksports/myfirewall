@@ -36,6 +36,7 @@ $ErrorActionPreference = "Stop"
 # --- Config ------------------------------------------------------------------
 
 $RepoRoot      = $PSScriptRoot
+if ($RepoRoot) { Set-Location $RepoRoot }
 $Owner         = "dparksports"
 $Repo          = "myfirewall"
 $CliCsproj     = Join-Path $RepoRoot "MyFirewall.csproj"
