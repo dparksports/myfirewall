@@ -1,4 +1,4 @@
-# 🛡️ MyFirewall v5.7.23
+# 🛡️ MyFirewall v5.7.24
 
 > **Ultra-Low Latency Windows Network Isolation & Process Security Suite**  
 > Built with **.NET 10.0**, Native Windows Firewall COM (`INetFwPolicy2`), Real-Time Kernel Event Tracing (ETW), **Spectre.Console CLI**, and a Dark-Theme **WPF Desktop App**.
@@ -117,10 +117,15 @@ dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -o ./rele
 
 ## 🏷️ Release History
 
-### **v5.7.23** *(Latest)*
+### **v5.7.24** *(Latest)*
+- **Self-Contained Single-File Native Extraction**: Fixed missing .NET library launch errors by enabling `<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>` and embedding native C++ assemblies (`KernelTraceControl.dll` / `msdia140.dll`) directly into self-extracting binaries.
+- **UAC Manifest Sidecars**: Configured `CopyManifestSidecar` targets for CLI and Desktop single-file builds to ensure UAC administrator elevation manifests are generated and maintained.
+- **Repository Optimization**: Purged legacy build `.zip` archives from git history to maintain a lightweight codebase.
+
+### **v5.7.23**
 - **Spectre.Console Stability Fix**: Wrapped alert log outputs with `Markup.Escape()` to eliminate ANSI markup parsing crashes on timestamp brackets (e.g. `[14:22:20]`).
 - **WPF Binding Protection**: Ensured all read-only model properties (`PortDisplay`) use `Mode=OneWay` bindings.
-- **Updated Release Archives**: Clean Release builds published for both CLI and Desktop editions (`MyFirewall-CLI-v5.7.23.zip`, `MyFirewall-Desktop-v5.7.23.zip`).
+- **Updated Release Archives**: Clean Release builds published for both CLI and Desktop editions.
 
 ---
 
