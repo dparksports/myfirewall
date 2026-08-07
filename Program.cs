@@ -104,10 +104,23 @@ class Program
     private const double GeoThrottleSeconds       = 1.5;
     private const int    GeoMaxRetries            = 3;
 
-    private static string BlockedFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, BlockedFile);
-    private static string IgnoredFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, IgnoredFile);
-    private static string CrashLogFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CrashLogFile);
-    private static string EtwLogFilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, EtwLogFile);
+    private static string BlockedFilePath => Path.Combine(ResolveBaseDir(), BlockedFile);
+    private static string IgnoredFilePath => Path.Combine(ResolveBaseDir(), IgnoredFile);
+    private static string CrashLogFilePath => Path.Combine(ResolveBaseDir(), CrashLogFile);
+    private static string EtwLogFilePath => Path.Combine(ResolveBaseDir(), EtwLogFile);
+
+    private static string ResolveBaseDir()
+    {
+        string? exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName);
+        if (!string.IsNullOrEmpty(exeDir))
+        {
+            string candidate = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", ".."));
+            if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, "MyFirewall.csproj")))
+                return candidate;
+            return exeDir;
+        }
+        return AppDomain.CurrentDomain.BaseDirectory;
+    }
 
     // NET_FW_ACTION_ and NET_FW_RULE_DIR_ enum values for COM interop
     private const int NET_FW_ACTION_BLOCK  = 0;

@@ -43,7 +43,7 @@ namespace MyFirewall.Desktop.Services
                 // Check if we're in a typical build output folder (contains .dll files alongside)
                 // and walk up if so; otherwise use the exe dir directly.
                 string candidate = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", ".."));
-                if (Directory.Exists(candidate))
+                if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, "MyFirewall.Desktop.csproj")))
                     return candidate;
 
                 return exeDir;
