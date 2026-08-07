@@ -132,6 +132,7 @@ Run "dotnet" @(
     "-r", "win-x64",
     "--self-contained", "true",
     "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
     "-o", $CliOut
 )
 Write-OK "CLI published"
@@ -188,7 +189,7 @@ Write-OK "Tag $TagName pushed"
 
 Write-Step "Creating GitHub release for $TagName"
 
-if (-not $Token) {
+if (-not $Token -and -not $DryRun) {
     Write-Fail "No GitHub token found. Set env var GITHUB_TOKEN or pass -Token <your-pat>"
 }
 
