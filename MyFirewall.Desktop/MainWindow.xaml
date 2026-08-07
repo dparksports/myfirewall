@@ -473,6 +473,8 @@
                                 <CheckBox Content="StartMenuExperienceHost" IsChecked="{Binding IsStartMenuExperienceHostEnabled}" Margin="0,4"/>
                                 <CheckBox Content="ShellExperienceHost" IsChecked="{Binding IsShellExperienceHostEnabled}" Margin="0,4"/>
                                 <CheckBox Content="Block WebView2 Net" IsChecked="{Binding IsWebView2Blocked}" Margin="0,4" Foreground="{StaticResource StatusAmber}"/>
+                                <Separator Margin="0,5" Background="{DynamicResource BorderMuted}" Height="1"/>
+                                <CheckBox Content="Share App Usage Telemetry" IsChecked="{Binding IsTelemetryEnabled}" Margin="0,4" Foreground="{StaticResource TextSecondary}"/>
                             </StackPanel>
                         </Grid>
                     </Border>

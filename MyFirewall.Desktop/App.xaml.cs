@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Principal;
 using System.Windows;
 using MyFirewall.Desktop.ViewModels;
+using MyFirewall.Desktop.Services;
 
 namespace MyFirewall.Desktop
 {
@@ -64,6 +65,9 @@ namespace MyFirewall.Desktop
                 Shutdown();
                 return;
             }
+
+            var telemetry = new TelemetryService();
+            _ = telemetry.TrackEventAsync("app_started");
 
             MainWindow = new MainWindow();
             MainWindow.Show();

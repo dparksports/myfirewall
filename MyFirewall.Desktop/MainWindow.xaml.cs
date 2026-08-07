@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Input;
 using MyFirewall.Desktop.ViewModels;
 
+using MyFirewall.Desktop.Services;
+
 namespace MyFirewall.Desktop
 {
     public partial class MainWindow : Window
@@ -13,6 +15,9 @@ namespace MyFirewall.Desktop
 
         private void Window_Closed(object sender, System.EventArgs e)
         {
+            var telemetry = new TelemetryService();
+            _ = telemetry.TrackEventAsync("app_closed");
+
             if (DataContext is MainViewModel vm)
             {
                 vm.Shutdown();

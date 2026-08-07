@@ -232,6 +232,18 @@ namespace MyFirewall.Desktop.ViewModels
             }
         }
 
+        public bool IsTelemetryEnabled
+        {
+            get => TelemetryService.IsTelemetryEnabled;
+            set
+            {
+                TelemetryService.IsTelemetryEnabled = value;
+                OnPropertyChanged(nameof(IsTelemetryEnabled));
+                if (value) AddAlert("App telemetry data collection enabled.", AlertSeverity.Info);
+                else AddAlert("App telemetry data collection disabled.", AlertSeverity.Warning);
+            }
+        }
+
         // Commands
         public RelayCommand<object> BlockIPCommand { get; }
         public RelayCommand<object> BlockProcessCommand { get; }
