@@ -267,7 +267,17 @@ namespace MyFirewall.Desktop.Services
                         ruleOut.Name = outName;
                         ruleOut.Description = $"Auto-blocked process {appName} by TCP Monitor";
                         ruleOut.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                        ruleOut.ApplicationName = executablePath;
+                        
+                        string? pfn = GetPackageFamilyName(executablePath);
+                        if (pfn != null)
+                        {
+                            try { ruleOut.LocalAppPackageId = pfn; } catch { }
+                        }
+                        else
+                        {
+                            ruleOut.ApplicationName = executablePath;
+                        }
+                        
                         ruleOut.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
                         ruleOut.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                         ruleOut.Enabled = true;
@@ -281,7 +291,17 @@ namespace MyFirewall.Desktop.Services
                         ruleIn.Name = inName;
                         ruleIn.Description = $"Auto-blocked process {appName} by TCP Monitor";
                         ruleIn.Protocol = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
-                        ruleIn.ApplicationName = executablePath;
+                        
+                        string? pfn = GetPackageFamilyName(executablePath);
+                        if (pfn != null)
+                        {
+                            try { ruleIn.LocalAppPackageId = pfn; } catch { }
+                        }
+                        else
+                        {
+                            ruleIn.ApplicationName = executablePath;
+                        }
+                        
                         ruleIn.Direction = (int)NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
                         ruleIn.Action = (int)NET_FW_ACTION.NET_FW_ACTION_BLOCK;
                         ruleIn.Enabled = true;
@@ -298,6 +318,35 @@ namespace MyFirewall.Desktop.Services
                     return false;
                 }
             }
+        }
+
+        private static string? GetPackageFamilyName(string executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath)) return null;
+            string pathLower = executablePath.ToLowerInvariant();
+            if (!pathLower.Contains("\\windowsapps\\") && !pathLower.Contains("\\systemapps\\"))
+                return null;
+
+            string? folderName = null;
+            var directory = System.IO.Path.GetDirectoryName(executablePath);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                string dirName = System.IO.Path.GetFileName(directory);
+                string parent = System.IO.Path.GetDirectoryName(directory) ?? "";
+                if (parent.ToLowerInvariant().EndsWith("\\windowsapps") || parent.ToLowerInvariant().EndsWith("\\systemapps"))
+                {
+                    folderName = dirName;
+                    break;
+                }
+                directory = parent;
+            }
+
+            if (string.IsNullOrEmpty(folderName)) return null;
+
+            var parts = folderName.Split('_');
+            if (parts.Length < 2) return folderName;
+
+            return parts[0] + "_" + parts[parts.Length - 1];
         }
 
         public void RemoveBlockProcessRule(string appName)

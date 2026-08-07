@@ -437,7 +437,17 @@ class Program
                     INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     outRule.Name            = outName;
                     outRule.Description     = $"App-level block (outbound) by TCP Monitor | {processName}";
-                    outRule.ApplicationName = executablePath;
+                    
+                    string? pfn = GetPackageFamilyName(executablePath);
+                    if (pfn != null)
+                    {
+                        try { ((dynamic)outRule).LocalAppPackageId = pfn; } catch { }
+                    }
+                    else
+                    {
+                        outRule.ApplicationName = executablePath;
+                    }
+                    
                     outRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     outRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
                     outRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
@@ -448,7 +458,16 @@ class Program
                     INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     inRule.Name            = inName;
                     inRule.Description     = $"App-level block (inbound) by TCP Monitor | {processName}";
-                    inRule.ApplicationName = executablePath;
+                    
+                    if (pfn != null)
+                    {
+                        try { ((dynamic)inRule).LocalAppPackageId = pfn; } catch { }
+                    }
+                    else
+                    {
+                        inRule.ApplicationName = executablePath;
+                    }
+                    
                     inRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     inRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
                     inRule.Action          = NET_FW_ACTION.NET_FW_ACTION_BLOCK;
@@ -464,6 +483,35 @@ class Program
                     return false;
                 }
             }
+        }
+
+        private static string? GetPackageFamilyName(string executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(executablePath)) return null;
+            string pathLower = executablePath.ToLowerInvariant();
+            if (!pathLower.Contains("\\windowsapps\\") && !pathLower.Contains("\\systemapps\\"))
+                return null;
+
+            string? folderName = null;
+            var directory = Path.GetDirectoryName(executablePath);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                string dirName = Path.GetFileName(directory);
+                string parent = Path.GetDirectoryName(directory) ?? "";
+                if (parent.ToLowerInvariant().EndsWith("\\windowsapps") || parent.ToLowerInvariant().EndsWith("\\systemapps"))
+                {
+                    folderName = dirName;
+                    break;
+                }
+                directory = parent;
+            }
+
+            if (string.IsNullOrEmpty(folderName)) return null;
+
+            var parts = folderName.Split('_');
+            if (parts.Length < 2) return folderName;
+
+            return parts[0] + "_" + parts[parts.Length - 1];
         }
 
         public static void RemoveAppBlockRule(string processName)

@@ -1,7 +1,7 @@
-# 🛡️ MyFirewall v5.7.24
+# 🛡️ MyFirewall
 
 > **Ultra-Low Latency Windows Network Isolation & Process Security Suite**  
-> Built with **.NET 10.0**, Native Windows Firewall COM (`INetFwPolicy2`), Real-Time Kernel Event Tracing (ETW), **Spectre.Console CLI**, and a Dark-Theme **WPF Desktop App**.
+> Powered by **.NET 10.0**, Native Windows Firewall COM (`INetFwPolicy2`), Real-Time Kernel Event Tracing (ETW), **Spectre.Console CLI**, and a Dark-Theme **WPF Desktop Dashboard**.
 
 ---
 
@@ -9,125 +9,121 @@
 
 ---
 
-## 🌟 Key Features
+## 🚀 Overview
 
-### ⚡ Real-Time Kernel Event Tracing (ETW)
-* **Instant Process Interception**: Listens directly to Windows Kernel `ProcessStart` and network events via `Microsoft.Diagnostics.Tracing.TraceEvent`.
-* **Zero-Escape Enforcement**: Applies application-level firewall rules the millisecond a monitored executable spawns—before out-of-process network packets can leave the host adapter.
-* **Ghost Connection Tracking**: Automatically detects and marks closed sockets in WPF with soft opacity until Windows TCP state teardown completes.
-
-### 🧱 Native COM Windows Firewall Engine
-* **Direct COM Interop**: Interacts natively with `HNetCfg.FwPolicy2` and `HNetCfg.FWRule` without relying on slow external `powershell.exe` subprocesses.
-* **Decoupled Network Isolation**: Severs restricted IP endpoints while preserving shared process integrity (preventing infinite spawn-kill loops for components like Microsoft Edge WebView2).
-* **Proactive WebView2 Network Shielding**: One-click toggle to isolate `msedgewebview2.exe` network access dynamically across registered installation paths.
-
-### 🖥️ Dual User Interfaces (CLI & Desktop)
-* **Spectre.Console Terminal UI**: Rich terminal dashboard featuring live connection tables, color-coded ETW status indicators, thread-safe alert logs, and quick interactive keybindings (`Q`, `K`, `B`, `I`, `P`, `S`, `T`, `L`, `R`).
-* **WPF Dark-Mode Desktop App**: Premium WPF dashboard with status color brushes, real-time search/filtering, process ancestry graphs, digital signature verification, and system toggle controls.
+**MyFirewall** is a lightweight, high-performance network monitor and process security suite for Windows. Designed for system administrators, security engineers, and power users, MyFirewall combines real-time kernel-level process interception with direct COM-level firewall rule management—providing zero-escape network enforcement without external dependencies or heavy background overhead.
 
 ---
 
-## 🏗️ Architecture & Data Flow
+## ✨ Core Capabilities
+
+### ⚡ Real-Time Kernel Event Tracing (ETW)
+* **Instant Process Interception**: Captures kernel `ProcessStart` and network events via `Microsoft.Diagnostics.Tracing.TraceEvent`.
+* **Zero-Escape Enforcement**: Applies firewall rules the millisecond a target executable spawns—preventing network packets from leaving the adapter.
+* **UWP & AppContainer Support**: Automatically resolves Package Family Names (PFN) for modern Windows Apps (e.g., `StartMenuExperienceHost`) to apply native `LocalAppPackageId` firewall isolation.
+* **Ghost Connection Tracking**: Automatically highlights decaying sockets during Windows TCP teardown with visual opacity hints.
+
+### 🧱 Native COM Windows Firewall Engine
+* **Direct COM Interop**: Interacts directly with `HNetCfg.FwPolicy2` and `HNetCfg.FWRule` COM objects without relying on slow `powershell.exe` child processes.
+* **Granular Process Isolation**: Severs specific network endpoints or blocks entire application executables natively.
+* **System Component Shields**: Quick toggles to isolate or block system telemetry services like `msedgewebview2.exe` and UWP system hosts.
+
+### 🖥️ Dual Modern User Interfaces
+
+#### 1. Spectre.Console Terminal UI
+* **Interactive CLI Dashboard**: Live TCP connection tables, color-coded ETW status indicators, thread-safe alert logs, and instant keyboard shortcuts.
+* **Quick Keybindings**:
+  * `Q` — Gracefully stop & exit
+  * `K` — Interactively kill process trees
+  * `B` — Manage blocked IP rules
+  * `I` — Manage ignored application lists
+  * `P` — Inspect process ancestry & digital signatures
+  * `S` — System settings & telemetry toggles
+  * `T` — Toggle threat monitoring strategy
+  * `L` — Toggle viewable data tables
+  * `R` — Reset & restore default firewall rules
+  * `H / F1` — Interactive help modal
+
+#### 2. WPF Dark-Mode Desktop App
+* **Visual Control Center**: Modern dark dashboard with search & filtering across active connections.
+* **Process Intelligence**: Deep inspection including digital certificates, executable path resolution, parent process trees, and dynamic bandwidth metrics.
+* **One-Click Toggles**: Quick controls for system host isolation, telemetry shielding, and IP block lists.
+
+---
+
+## 🏗️ System Architecture
 
 ```mermaid
 graph TD
-    subgraph Kernel & OS Layer
+    subgraph Kernel & System Layer
         Kernel["Windows Kernel Event Tracing (ETW)"]
-        WinFW["Windows Firewall Engine (INetFwPolicy2)"]
+        WinFW["Windows Firewall Engine (INetFwPolicy2 / INetFwRule3)"]
     end
 
-    subgraph Core Monitoring Engine
-        Tracker["EtwNetworkTracker"]
-        GeoService["GeoIP & Domain Cache Service"]
-        FwManager["FirewallManager (Native COM)"]
+    subgraph Core Engine
+        ETW["EtwNetworkTracker"]
+        Resolver["UWP Package Family Name (PFN) Resolver"]
+        GeoService["GeoIP & Process Metadata Service"]
+        FwService["FirewallService (Native COM)"]
     end
 
-    subgraph User Interfaces
+    subgraph Frontends
         CLI["Spectre.Console CLI App"]
-        WPF["WPF Desktop Dashboard"]
+        WPF["WPF Desktop App"]
     end
 
-    Kernel -->|ProcessStart & Socket Events| Tracker
-    Tracker -->|Tracked Connections| GeoService
-    GeoService -->|Enriched Metadata| CLI
-    GeoService -->|Enriched Metadata| WPF
-    CLI -->|User Block/Unblock Actions| FwManager
-    WPF -->|User Block/Unblock Actions| FwManager
-    FwManager -->|Native COM Rules| WinFW
+    Kernel -->|Process & Socket Events| ETW
+    ETW -->|Active Sockets| GeoService
+    GeoService -->|Enriched Data| CLI
+    GeoService -->|Enriched Data| WPF
+    
+    CLI -->|Block Process / IP| FwService
+    WPF -->|Block Process / IP| FwService
+    
+    FwService -->|Extract PFN for UWP| Resolver
+    Resolver -->|LocalAppPackageId / AppPath| FwService
+    FwService -->|COM Interop| WinFW
 ```
 
 ---
 
-## 🎮 CLI Terminal Controls
+## 🛠️ Build & Installation
 
-When running `MyFirewall.exe` (CLI), press any of the following keys for instant action:
+### Requirements
+* **Windows 10 / 11** (64-bit)
+* **.NET 10.0 SDK**
+* **Administrator Privileges** (Required for ETW kernel session creation and Windows Firewall COM management)
 
-| Key | Action | Description |
-| :--- | :--- | :--- |
-| **`Q`** | **Quit** | Gracefully stop ETW tracing and exit the CLI application. |
-| **`K`** | **Kill Process** | Interactively select and terminate a process and its child tree. |
-| **`B`** | **Manage Blocked IPs** | Add or remove custom IPv4/IPv6 outbound block rules. |
-| **`I`** | **Ignore Process** | Exclude trusted applications from alert monitoring. |
-| **`P`** | **Process Details** | View detailed digital signatures, executable paths, and parent PIDs. |
-| **`S`** | **System Settings** | Toggle Windows Search, Widgets, Language Sync, and Hosts configuration. |
-| **`T`** | **Toggle Strategy** | Switch threat intel mode between *Connection-Driven* and *ProcessStart ETW*. |
-| **`L`** | **Toggle Lists** | Expand/collapse extra tables (Blocked IPs, Ignored Procs, Domain Cache). |
-| **`R`** | **Restore Rules** | Reset and re-apply clean firewall rules. |
-| **`H / F1`** | **Help Screen** | Open full keyboard shortcut guide and system status summary. |
-
----
-
-## 💻 WPF Desktop Dashboard
-
-The WPF Desktop client (`MyFirewall.Desktop.exe`) offers a visual control center:
-
-- **Live Data Grid**: Sort and search active TCP connections by PID, Process Name, Destination IP, Remote Port, Country, and Bandwidth.
-- **Visual Status Badges**: High-visibility color indicators for `Allowed`, `Blocked`, and `Ghosted` connection states.
-- **Process Intelligence**: Double-click any row to view parent process ancestry, file creation timestamps, and digital certificate validation.
-- **One-Click Toggles**: Quickly enable/disable WebView2 network isolation or system telemetry options.
-
----
-
-## 📦 Build & Installation
-
-### Prerequisites
-- **Windows 10 / 11** (64-bit)
-- **.NET 10.0 SDK** (or .NET 10.0 Desktop Runtime)
-- **Administrator Privileges** (Required for ETW kernel tracing and Windows Firewall COM operations)
-
-### Building from Source
+### Build Commands
 
 ```powershell
 # Clone the repository
 git clone https://github.com/dparksports/myfirewall.git
 cd myfirewall
 
-# Build the CLI version
+# Build the CLI application
 dotnet build MyFirewall.csproj -c Release
 
-# Build the WPF Desktop version
+# Build the WPF Desktop application
 dotnet build MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release
 
-# Publish self-contained release builds
-dotnet publish MyFirewall.csproj -c Release -o ./release_cli
-dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -o ./release_desktop
+# Publish self-contained single-file binaries
+dotnet publish MyFirewall.csproj -c Release -r win-x64 --self-contained -o ./publish/cli
+dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -r win-x64 --self-contained -o ./publish/desktop
 ```
 
 ---
 
-## 🏷️ Release History
+## 📦 Automated Release
 
-### **v5.7.24** *(Latest)*
-- **Self-Contained Single-File Native Extraction**: Fixed missing .NET library launch errors by enabling `<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>` and embedding native C++ assemblies (`KernelTraceControl.dll` / `msdia140.dll`) directly into self-extracting binaries.
-- **UAC Manifest Sidecars**: Configured `CopyManifestSidecar` targets for CLI and Desktop single-file builds to ensure UAC administrator elevation manifests are generated and maintained.
-- **Repository Optimization**: Purged legacy build `.zip` archives from git history to maintain a lightweight codebase.
+To automatically bump the version, build self-contained binaries, zip artifacts, commit changes, tag, and publish a GitHub release:
 
-### **v5.7.23**
-- **Spectre.Console Stability Fix**: Wrapped alert log outputs with `Markup.Escape()` to eliminate ANSI markup parsing crashes on timestamp brackets (e.g. `[14:22:20]`).
-- **WPF Binding Protection**: Ensured all read-only model properties (`PortDisplay`) use `Mode=OneWay` bindings.
-- **Updated Release Archives**: Clean Release builds published for both CLI and Desktop editions.
+```powershell
+.\release.ps1 -BumpType Patch
+```
 
 ---
 
 ## 📜 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+This project is open source under the [MIT License](LICENSE).
