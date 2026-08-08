@@ -1569,10 +1569,12 @@ class Program
             var searchBgBingStatus = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled() ? "[red]Disabled[/]" : "[green]Enabled[/]";
             var startMenuEnabled = SystemSettingsManager.IsStartMenuExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
             var shellExpEnabled = SystemSettingsManager.IsShellExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
+            var telemetryEnabled = SystemSettingsManager.IsTelemetryEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
 
             var prompt = new SelectionPrompt<string>()
                 .Title("[bold cyan]System Settings Management[/]\nSelect an option to toggle:")
                 .AddChoices(
+                    $"Toggle App Telemetry (Current: {telemetryEnabled})",
                     $"Toggle Language Sync (Current: {syncEnabled})",
                     $"Toggle Windows Widgets (Current: {widgetsEnabled})",
                     $"Toggle SearchHost Box (Current: {searchEnabled})",
@@ -1591,7 +1593,13 @@ class Program
 
             if (selection == "Back to Monitor") break;
 
-            if (selection.StartsWith("Toggle Language Sync"))
+            if (selection.StartsWith("Toggle App Telemetry"))
+            {
+                bool newState = !SystemSettingsManager.IsTelemetryEnabled();
+                SystemSettingsManager.SetTelemetryEnabled(newState);
+                AnsiConsole.MarkupLine($"App Telemetry set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
+            }
+            else if (selection.StartsWith("Toggle Language Sync"))
             {
                 bool newState = !SystemSettingsManager.IsLanguageSyncEnabled();
                 SystemSettingsManager.SetLanguageSyncEnabled(newState);
@@ -2186,6 +2194,31 @@ class TcpConnectionInfo
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 static class SystemSettingsManager
 {
+    public static bool IsTelemetryEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\MyFirewall");
+            if (key != null)
+            {
+                var val = key.GetValue("TelemetryEnabled");
+                if (val is int intVal) return intVal == 1;
+            }
+            return true; // Default to true
+        }
+        catch { return true; }
+    }
+
+    public static void SetTelemetryEnabled(bool enable)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\MyFirewall");
+            key.SetValue("TelemetryEnabled", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Program.LogCrash($"SetTelemetryEnabled: {ex.Message}"); }
+    }
+
     public static bool IsLanguageSyncEnabled()
     {
         try
