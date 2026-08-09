@@ -954,6 +954,7 @@ class Program
     static void Main(string[] args)
     {
         Console.Title = "TCP Monitor v5.0";
+        MyFirewall.Services.TelemetryService.Instance.TrackEvent("cli_app_launch");
 
         // Parse arguments
         for (int i = 0; i < args.Length; i++)
