@@ -38,7 +38,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot      = $PSScriptRoot
 if ($RepoRoot) { Set-Location $RepoRoot }
 $Owner         = "dparksports"
-$Repo          = "myfirewall"
+$Repo          = "myfirewall-windows"
 $CliCsproj     = Join-Path $RepoRoot "MyFirewall.csproj"
 $DesktopCsproj = Join-Path $RepoRoot "MyFirewall.Desktop\MyFirewall.Desktop.csproj"
 $PublishDir    = Join-Path $RepoRoot "publish"

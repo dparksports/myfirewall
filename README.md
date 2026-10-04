@@ -102,7 +102,7 @@ MyFirewall.exe --refresh 3   # optional refresh interval in seconds
 **Requirements:** Windows 10/11 x64, .NET 10 SDK, Administrator privileges (ETW kernel sessions and firewall COM need elevation).
 
 ```powershell
-git clone https://github.com/dparksports/myfirewall.git
+git clone https://github.com/dparksports/myfirewall-windows.git
 cd myfirewall
 
 # CLI
@@ -116,7 +116,7 @@ dotnet publish MyFirewall.csproj                -c Release -r win-x64 --self-con
 dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -r win-x64 --self-contained -o ./publish/desktop
 ```
 
-Grab a ready-to-run build from the [Releases page](https://github.com/dparksports/myfirewall/releases) — each release ships `release_cli_win_x64.zip` and `release_desktop_win_x64.zip`, fully self-contained (no .NET install required). Run as Administrator.
+Grab a ready-to-run build from the [Releases page](https://github.com/dparksports/myfirewall-windows/releases) — each release ships `release_cli_win_x64.zip` and `release_desktop_win_x64.zip`, fully self-contained (no .NET install required). Run as Administrator.
 
 ### Automated release
 
