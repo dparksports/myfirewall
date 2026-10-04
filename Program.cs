@@ -90,7 +90,7 @@ public class BlockedIPMetadata
 }
 
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-class Program
+partial class Program
 {
     #region Constants
 
@@ -935,7 +935,6 @@ class Program
     static Dictionary<string, string> _socketHistory = new();
     static EtwNetworkTracker?        _etwTracker;
     static volatile bool             _running             = true;
-    static bool                      _showExtraLists      = false;
     static readonly HttpClient       _http                = new();
     static readonly SemaphoreSlim    _geoSemaphore        = new(1, 1); // Fix #8: serial throttle
     static DateTime                  _lastGeoCall         = DateTime.MinValue;
@@ -944,9 +943,8 @@ class Program
     static readonly List<string>     _alertLog            = new();
     static readonly object           _alertLock           = new();
 
-    // Cached connection list shared between DrawScreen and AutoEnforceBlockRules
+    // Cached connection list shared between the TUI frame and AutoEnforceBlockRules
     static List<TcpConnectionInfo>   _lastConnections     = new();
-    static int                       _prevRowCount        = 0;
 
     #endregion
 
@@ -954,7 +952,7 @@ class Program
 
     static void Main(string[] args)
     {
-        Console.Title = "TCP Monitor v5.0";
+        Console.Title = $"TCP Monitor v{typeof(Program).Assembly.GetName().Version?.ToString(3)}";
         MyFirewall.Services.TelemetryService.Instance.TrackEvent("cli_app_launch");
 
         // Parse arguments
@@ -1013,26 +1011,38 @@ class Program
 
         DateTime lastRefresh = DateTime.MinValue;
 
-        while (_running)
-        {
-            // Fix #4: 3-second refresh instead of 2-second
-            if ((DateTime.Now - lastRefresh).TotalSeconds >= RefreshIntervalSeconds)
+        // TUI (Path A): one atomic Live frame — no repaint-in-place, no Console.Clear()
+        // after startup. Keys are polled between refreshes; data refreshes on the timer.
+        AnsiConsole.Live(new Rows())
+            .AutoClear(true)
+            .Overflow(VerticalOverflow.Crop)
+            .Cropping(VerticalOverflowCropping.Bottom)
+            .Start(ctx =>
             {
-                // Fix #5: Fetch connections ONCE, share between enforce + draw
-                _lastConnections = GetTcpConnections();
-                AutoEnforceBlockRules(_lastConnections);
-                DrawScreen(_lastConnections);
-                lastRefresh = DateTime.Now;
-            }
+                while (_running)
+                {
+                    if ((DateTime.Now - lastRefresh).TotalSeconds >= RefreshIntervalSeconds)
+                    {
+                        // Fetch connections ONCE, shared between enforce + frame
+                        _lastConnections = GetTcpConnections();
+                        AutoEnforceBlockRules(_lastConnections);
+                        lastRefresh = DateTime.Now;
+                    }
 
-            if (Console.KeyAvailable)
-            {
-                var key = Console.ReadKey(true);
-                HandleKeyPress(key);
-            }
+                    int keysPolled = 0;
+                    while (_running && Console.KeyAvailable && keysPolled++ < 8)
+                    {
+                        HandleKeyPress(Console.ReadKey(true));
+                    }
 
-            Thread.Sleep(50);
-        }
+                    // Live diffing makes redundant refreshes cheap (identical frame = no output),
+                    // and frequent refreshes keep the input caret and countdowns smooth.
+                    ctx.UpdateTarget(BuildFrame(_lastConnections));
+                    ctx.Refresh();
+
+                    Thread.Sleep(40);
+                }
+            });
 
         _etwTracker.Dispose();
         SaveAllData();
@@ -1041,503 +1051,9 @@ class Program
 
     #endregion
 
-    #region UIHelpers
-
-    static void DrawScreen(List<TcpConnectionInfo> connections)
-    {
-        // Fix #14: Cursor-based redraw — position cursor at top without Console.Clear()
-        Console.SetCursorPosition(0, 0);
-
-        var table = new Table().Border(TableBorder.Rounded).Expand();
-        table.Title   = new TableTitle("[bold cyan]TCP-MONITOR LIVE FEED[/]");
-        table.Caption = new TableTitle("[grey]Q Quit | K Kill | B Block | I Ignore | P Details | S System Settings | T Toggle Strategy | L Lists | R Restore FW | H Help[/]");
-
-        table.AddColumn("#");
-        table.AddColumn("Process");
-        table.AddColumn("PID");
-        table.AddColumn("Remote Address");
-        table.AddColumn("Geo / Org");
-        table.AddColumn("Domain");
-        table.AddColumn("Time");
-        table.AddColumn(new TableColumn("Sent").RightAligned());
-        table.AddColumn(new TableColumn("Recv").RightAligned());
-
-        int overhead = _showExtraLists ? 30 : 10;
-        int maxRows;
-        try   { maxRows = Math.Max(1, Console.WindowHeight - overhead); }
-        catch { maxRows = 20; }
-
-        int displayCount = Math.Min(connections.Count, maxRows);
-        for (int i = 0; i < displayCount; i++)
-        {
-            var c = connections[i];
-            bool isBlocked = _blockedIPs.ContainsKey(c.RemoteIP) || _blockedProcessNames.Contains(c.ProcessName);
-            string ipColor = isBlocked ? "red" : "white";
-
-            string processDisplay = c.IsGhosted 
-                ? $"[grey]{Markup.Escape(c.ProcessName)} (closed)[/]" 
-                : $"[bold white]{Markup.Escape(c.ProcessName)}[/]";
-
-            table.AddRow(
-                (i + 1).ToString(),
-                processDisplay,
-                $"[grey]{c.PID}[/]",
-                $"[{ipColor}]{Markup.Escape(c.RemoteIP)}[/]",
-                $"[magenta]{Markup.Escape(c.Geo)}[/]",
-                $"[blue]{Markup.Escape(c.Domain)}[/]",
-                c.Duration,
-                $"[green]{c.TotalSent}[/]",
-                $"[yellow]{c.TotalReceived}[/]"
-            );
-        }
-
-        AnsiConsole.Write(table);
-        string etwStatus = _etwTracker!.IsRunning ? "[green]Active[/]" : "[red]Stopped[/]";
-        AnsiConsole.MarkupLine(
-            $"[grey]Connections: {connections.Count} | Blocked IPs: {_blockedIPs.Count} | ETW: {etwStatus}[/]");
-        AnsiConsole.Write(new Rule());
-
-        // Alert log
-        lock (_alertLock)
-        {
-            if (_alertLog.Count > 0)
-            {
-                AnsiConsole.MarkupLine("[bold red on black] ⚠  AUTO-BLOCK ALERTS [/]");
-                foreach (var alert in _alertLog.TakeLast(5))
-                    AnsiConsole.MarkupLine(Markup.Escape(alert));
-                AnsiConsole.Write(new Rule());
-            }
-        }
-
-        if (_showExtraLists)
-        {
-            var grid = new Grid();
-            grid.AddColumn(); grid.AddColumn(); grid.AddColumn();
-
-            var bTable = new Table().Border(TableBorder.Rounded)
-                .AddColumn("[red]Blocked IPs[/]").AddColumn("Process").AddColumn("Domain").AddColumn("Blocked At");
-            foreach (var kvp in _blockedIPs.OrderBy(x => x.Key))
-                bTable.AddRow(kvp.Key, $"[grey]{Markup.Escape(kvp.Value.ProcessName)}[/]",
-                    $"[blue]{Markup.Escape(GetCachedDomain(kvp.Key))}[/]",
-                    $"[grey]{kvp.Value.Timestamp:yyyy-MM-dd HH:mm}[/]");
-            if (_blockedIPs.Count == 0) bTable.AddRow("[grey]None[/]", "", "", "");
-
-            var iTable = new Table().Border(TableBorder.Rounded).AddColumn("[yellow]Ignored Procs[/]");
-            foreach (var proc in _ignoredProcesses.OrderBy(x => x)) iTable.AddRow(Markup.Escape(proc));
-            if (_ignoredProcesses.Count == 0) iTable.AddRow("[grey]None[/]");
-
-            var dTable = new Table().Border(TableBorder.Rounded)
-                .AddColumn("[blue]Domain Cache (Last 15)[/]").AddColumn("Domain");
-            foreach (var kvp in _domainCache.OrderBy(x => x.Key).TakeLast(15))
-                dTable.AddRow(kvp.Key, Markup.Escape(kvp.Value));
-            if (_domainCache.Count == 0) dTable.AddRow("[grey]None[/]", "");
-
-            grid.AddRow(bTable, iTable, dTable);
-            AnsiConsole.Write(grid);
-        }
-
-        // Fix #14: Clear only the lines that may have "ghost" content if the table shrank
-        int currentRow = Console.CursorTop;
-        if (_prevRowCount > displayCount)
-        {
-            int linesToClear = Math.Min(_prevRowCount - displayCount + 2, Console.WindowHeight - currentRow - 1);
-            int width = Console.WindowWidth > 1 ? Console.WindowWidth - 1 : 0;
-            for (int i = 0; i < linesToClear; i++)
-                Console.WriteLine(new string(' ', width));
-        }
-        _prevRowCount = displayCount;
-    }
-
-    static void HandleKeyPress(ConsoleKeyInfo key)
-    {
-        switch (key.Key)
-        {
-            case ConsoleKey.Q: _running = false; break;
-            case ConsoleKey.K: Console.Clear(); KillProcessInteractive(); break;
-            case ConsoleKey.I: Console.Clear(); IgnoreProcessInteractive(); break;
-            case ConsoleKey.B: Console.Clear(); ManageBlockedIPsInteractive(); break;
-            case ConsoleKey.P: Console.Clear(); ShowProcessDetailsInteractive(); break;
-            case ConsoleKey.S: Console.Clear(); ManageSystemSettingsInteractive(); break;
-            case ConsoleKey.T:
-                if (_etwTracker != null)
-                {
-                    var nextStrategy = _etwTracker.MonitoringStrategy == ProcessMonitoringStrategy.ConnectionDriven
-                        ? ProcessMonitoringStrategy.ProcessStartEtw
-                        : ProcessMonitoringStrategy.ConnectionDriven;
-                    
-                    _etwTracker.SetMonitoringStrategy(nextStrategy);
-                    
-                    lock (_alertLock)
-                    {
-                        _alertLog.Add($"[blue]INFO: Switched monitoring strategy to {nextStrategy}[/]");
-                        if (_alertLog.Count > MaxAlertLogEntries) _alertLog.RemoveAt(0);
-                    }
-                    Console.Clear();
-                }
-                break;
-            case ConsoleKey.L: Console.Clear(); _showExtraLists = !_showExtraLists; break;
-            case ConsoleKey.R: Console.Clear(); RestoreFirewallConfigurationInteractive(); break;
-            case ConsoleKey.H:
-            case ConsoleKey.F1:
-                ShowHelp();
-                break;
-        }
-    }
-
-    static void ShowHelp()
-    {
-        AnsiConsole.Clear();
-
-        string etwStatus  = _etwTracker?.IsRunning == true ? "[green]Running[/]" : "[red]Stopped[/]";
-        string strategy   = _etwTracker?.MonitoringStrategy.ToString() ?? "N/A";
-        string blockedCnt = _blockedIPs.Count.ToString();
-        string ignoredCnt = _ignoredProcesses.Count.ToString();
-
-        var panel = new Panel(
-            $"[bold cyan]Keyboard Controls[/]\n" +
-            $"  [cyan]Q[/]       Quit the monitor\n" +
-            $"  [cyan]K[/]       Kill a process (interactive)\n" +
-            $"  [cyan]B[/]       Block / unblock IPs (interactive)\n" +
-            $"  [cyan]I[/]       Ignore / un-ignore processes (interactive)\n" +
-            $"  [cyan]P[/]       Process Intelligence / Details (interactive)\n" +
-            $"  [cyan]S[/]       System Settings (Language sync, Widgets, Search, Hosts) (interactive)\n" +
-            $"  [cyan]T[/]       Toggle Threat Intel Strategy (runtime)\n" +
-            $"  [cyan]L[/]       Toggle blocked/ignored/domain lists\n" +
-            $"  [cyan]R[/]       Restore explicit firewall rules (disable all others)\n" +
-            $"  [cyan]H / F1[/]  Show this help screen\n\n" +
-            $"[bold cyan]Status[/]\n" +
-            $"  ETW Tracing     : {etwStatus}\n" +
-            $"  Active Strategy : [cyan]{strategy}[/]\n" +
-            $"  Blocked IPs     : [red]{blockedCnt}[/]\n" +
-            $"  Ignored         : [yellow]{ignoredCnt}[/]\n\n" +
-            $"[bold cyan]Firewall Rules[/]\n" +
-            $"  Rules are created natively via Windows Firewall COM API.\n" +
-            $"  Display name format: [grey]{FirewallRulePrefix}-<process>-<ip>[/]\n" +
-            $"  View in [italic]wf.msc → Outbound Rules[/].\n\n" +
-            $"[bold cyan]Files[/]\n" +
-            $"  [grey]{BlockedFile}[/]   — persisted block list (IP|process)\n" +
-            $"  [grey]{IgnoredFile}[/]  — ignored process names (one per line)\n" +
-            $"  [grey]{CrashLogFile}[/]  — error and exception log"
-        ).Header("[bold]TCP Monitor Help[/]").Expand();
-
-        AnsiConsole.Write(panel);
-        AnsiConsole.MarkupLine("\nPress any key to return...");
-        Console.ReadKey(true);
-        Console.Clear();
-    }
-
-    #endregion
 
     #region ProcessControl
 
-    static void ShowProcessDetailsInteractive()
-    {
-        var conns = GetTcpConnections();
-        if (conns.Count == 0) { AnsiConsole.MarkupLine("[grey]No active connections.[/]"); Thread.Sleep(800); return; }
-
-        var choices = conns.Select(c => $"{c.PID}: {Markup.Escape(c.ProcessName)}").Distinct().ToList();
-        choices.Add("Cancel");
-
-        var selected = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select a process to view its [cyan]THREAT INTELLIGENCE[/]:")
-                .AddChoices(choices));
-
-        if (selected == "Cancel") return;
-
-        if (int.TryParse(selected.Split(':')[0], out int pid))
-        {
-            AnsiConsole.Clear();
-            AnsiConsole.MarkupLine($"[cyan]Resolving Threat Intelligence for PID {pid}...[/]");
-
-            string parentProcessName = "Unknown";
-            string executablePath = "N/A";
-            string signature = "Unsigned / Unknown";
-            string lastModified = "N/A";
-
-            IntPtr hProcess = IntPtr.Zero;
-            try
-            {
-                hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_QUERY_INFORMATION, false, pid);
-                if (hProcess == IntPtr.Zero)
-                {
-                    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-                }
-
-                if (hProcess != IntPtr.Zero)
-                {
-                    // 1. Path
-                    var sb = new System.Text.StringBuilder(1024);
-                    int size = sb.Capacity;
-                    if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
-                    {
-                        executablePath = sb.ToString();
-                    }
-
-                    // 2. Parent PID & Name
-                    var pbi = new PROCESS_BASIC_INFORMATION();
-                    int status = NtQueryInformationProcess(hProcess, 0, ref pbi, Marshal.SizeOf(pbi), out _);
-                    if (status == 0)
-                    {
-                        int parentPid = pbi.InheritedFromUniqueProcessId.ToInt32();
-                        if (parentPid > 0)
-                        {
-                            try
-                            {
-                                using var parent = Process.GetProcessById(parentPid);
-                                parentProcessName = $"{parent.ProcessName} (PID {parentPid})";
-                            }
-                            catch
-                            {
-                                parentProcessName = $"PID {parentPid} (Exited)";
-                            }
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                try
-                {
-                    using var process = Process.GetProcessById(pid);
-                    executablePath = process.MainModule?.FileName ?? "N/A";
-                }
-                catch { }
-            }
-            finally
-            {
-                if (hProcess != IntPtr.Zero)
-                {
-                    CloseHandle(hProcess);
-                }
-            }
-
-            if (!string.IsNullOrEmpty(executablePath) && executablePath != "N/A" && File.Exists(executablePath))
-            {
-                try
-                {
-                    var fileInfo = new FileInfo(executablePath);
-                    lastModified = fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss");
-
-                    using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(executablePath))
-                    {
-                        using (var cert2 = new System.Security.Cryptography.X509Certificates.X509Certificate2(cert))
-                        {
-                            string subject = cert2.Subject;
-                            if (subject.Contains("CN="))
-                            {
-                                int start = subject.IndexOf("CN=") + 3;
-                                int end = subject.IndexOf(',', start);
-                                if (end > start)
-                                {
-                                    signature = "Signed by: " + subject.Substring(start, end - start);
-                                }
-                                else
-                                {
-                                    signature = "Signed by: " + subject.Substring(start);
-                                }
-                            }
-                            else
-                            {
-                                signature = "Signed: " + cert2.Subject;
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                    signature = "Unsigned";
-                }
-            }
-
-            var panel = new Panel(
-                $"[bold cyan]APPLICATION[/]\n" +
-                $"  Name: {Markup.Escape(selected.Split(':')[1].Trim())}\n" +
-                $"  PID : {pid}\n\n" +
-                $"[bold cyan]PARENT PROCESS[/]\n" +
-                $"  {Markup.Escape(parentProcessName)}\n\n" +
-                $"[bold cyan]DIGITAL SIGNATURE[/]\n" +
-                $"  {Markup.Escape(signature)}\n\n" +
-                $"[bold cyan]LOCATION (EXECUTABLE PATH)[/]\n" +
-                $"  {Markup.Escape(executablePath)}\n\n" +
-                $"[bold cyan]LAST MODIFIED[/]\n" +
-                $"  {lastModified}"
-            ).Header($"[bold]Threat Intelligence Report (PID {pid})[/]").Expand();
-
-            AnsiConsole.Write(panel);
-            AnsiConsole.MarkupLine("\nPress any key to return...");
-            Console.ReadKey(true);
-            Console.Clear();
-        }
-    }
-
-    static void KillProcessInteractive()
-    {
-        var conns = GetTcpConnections();
-        if (conns.Count == 0) { AnsiConsole.MarkupLine("[grey]No active connections.[/]"); Thread.Sleep(800); return; }
-
-        var choices = conns.Select(c => $"{c.PID}: {Markup.Escape(c.ProcessName)}").Distinct().ToList();
-        choices.Add("Cancel");
-
-        var selected = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select process to [red]TERMINATE[/]:")
-                .AddChoices(choices));
-
-        if (selected == "Cancel") return;
-
-        if (int.TryParse(selected.Split(':')[0], out int pid))
-        {
-            try
-            {
-                var process = Process.GetProcessById(pid);
-                process.Kill(entireProcessTree: true);
-                AnsiConsole.MarkupLine("[green]Process (and tree) terminated.[/]");
-            }
-            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 5)
-            {
-                AnsiConsole.MarkupLine("[red]Access Denied. System or protected process?[/]");
-            }
-            catch (Exception ex) { AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]"); }
-            Thread.Sleep(1000);
-        }
-    }
-
-    static void IgnoreProcessInteractive()
-    {
-        var conns    = GetTcpConnections(includeIgnored: true);
-        var active   = conns.Select(c => c.ProcessName.ToLower()).Distinct().ToList();
-        var allNames = active.Union(_ignoredProcesses).Distinct().OrderBy(x => x).ToList();
-
-        if (allNames.Count == 0) return;
-
-        var prompt = new MultiSelectionPrompt<string>()
-            .Title("Select processes to [yellow]IGNORE[/] (Space=toggle, Enter=save):")
-            .NotRequired().PageSize(15).AddChoices(allNames);
-
-        foreach (var p in _ignoredProcesses)
-            if (allNames.Contains(p)) prompt.Select(p);
-
-        var selected = AnsiConsole.Prompt(prompt);
-        _ignoredProcesses = selected.Select(x => x.ToLower()).ToList();
-        SaveIgnoreList(); // Fix (ignored.txt): only write when user explicitly changes it
-    }
-
-    static void ManageBlockedIPsInteractive()
-    {
-        var conns     = GetTcpConnections();
-        var activeIPs = conns.GroupBy(c => c.RemoteIP)
-                             .ToDictionary(g => g.Key, g => g.First().ProcessName);
-        // Process-name entries (default policy blocks) live in _blockedIPs too, but
-        // this screen manages IP rules only — keep them out of the selectable set.
-        var allIPs    = activeIPs.Keys.Union(_blockedIPs.Keys).Where(IsValidIP).Distinct().OrderBy(x => x).ToList();
-
-        if (allIPs.Count == 0) { AnsiConsole.MarkupLine("[grey]No IPs available.[/]"); Thread.Sleep(800); return; }
-
-        var choices = allIPs.Select(ip =>
-        {
-            string proc = activeIPs.TryGetValue(ip, out var ap) ? ap
-                        : (_blockedIPs.TryGetValue(ip, out var bp) ? bp.ProcessName : "Unknown");
-            return $"{ip} ({Markup.Escape(proc)})";
-        }).ToList();
-
-        var prompt = new MultiSelectionPrompt<string>()
-            .Title("Select IPs to [red]BLOCK[/] (Space=toggle, Enter=save):")
-            .NotRequired().PageSize(15).AddChoices(choices);
-
-        foreach (var ip in _blockedIPs.Keys)
-        {
-            var choice = choices.FirstOrDefault(c => c.StartsWith(ip + " "));
-            if (choice != null) prompt.Select(choice);
-        }
-
-        var selected    = AnsiConsole.Prompt(prompt);
-        var selectedIPs = selected.Select(s => s.Split(' ')[0]).ToList();
-
-        // Fix #16: Validate IPs before accepting them
-        var invalidIPs = selectedIPs.Where(ip => !IsValidIP(ip)).ToList();
-        if (invalidIPs.Count > 0)
-        {
-            AnsiConsole.MarkupLine($"[red]Skipping invalid IPs: {string.Join(", ", invalidIPs)}[/]");
-            selectedIPs = selectedIPs.Except(invalidIPs).ToList();
-            Thread.Sleep(1200);
-        }
-
-        var newlyBlocked   = selectedIPs.Except(_blockedIPs.Keys).ToList();
-        var newlyUnblocked = _blockedIPs.Keys.Except(selectedIPs).Where(IsValidIP).ToList();
-
-        var newDict = new Dictionary<string, BlockedIPMetadata>();
-        foreach (var s in selected)
-        {
-            int openParen = s.IndexOf('(');
-            int closeParen = s.LastIndexOf(')');
-            if (openParen > 0 && closeParen > openParen)
-            {
-                string ip = s.Substring(0, openParen).Trim();
-                if (!IsValidIP(ip)) continue;
-                string proc = s.Substring(openParen + 1, closeParen - openParen - 1).Trim();
-                DateTime timestamp = DateTime.Now;
-                if (_blockedIPs.TryGetValue(ip, out var existing))
-                    timestamp = existing.Timestamp;
-                newDict[ip] = new BlockedIPMetadata { ProcessName = proc, Timestamp = timestamp };
-            }
-            else
-            {
-                string ip = s.Split(' ')[0];
-                if (IsValidIP(ip))
-                {
-                    DateTime timestamp = DateTime.Now;
-                    if (_blockedIPs.TryGetValue(ip, out var existing))
-                        timestamp = existing.Timestamp;
-                    newDict[ip] = new BlockedIPMetadata { ProcessName = "Unknown", Timestamp = timestamp };
-                }
-            }
-        }
-
-        // Preserve explicit process-name entries (e.g. default policy process blocks) —
-        // this screen only rewrites IP entries.
-        foreach (var kvp in _blockedIPs)
-        {
-            if (!IsValidIP(kvp.Key)) newDict[kvp.Key] = kvp.Value;
-        }
-
-        _blockedIPs = newDict;
-        RebuildBlockedProcessNames();
-        SaveBlockList();
-
-        // Fix #1/#6/#7: Use FirewallManager instead of powershell.exe
-        foreach (var ip in newlyBlocked)
-        {
-            string proc = _blockedIPs.TryGetValue(ip, out var p) ? p.ProcessName : "Unknown";
-            bool added  = FirewallManager.AddBlockRule(ip, proc);
-            if (!added)
-                AnsiConsole.MarkupLine($"[yellow]Note: Firewall rule for {ip} may already exist or failed — check {CrashLogFile}[/]");
-            else
-            {
-                ResetConnectionsToIp(ip); // Sever any existing active connections
-                // Also kill by PID for any connection whose process mapping may be stale
-                foreach (var c in _lastConnections.Where(c => c.RemoteIP == ip))
-                    ResetConnectionsForPid(c.PID);
-            }
-        }
-
-        if (newlyUnblocked.Count > 0)
-        {
-            // Remember explicit opt-outs so default-policy seeding never re-adds them.
-            var removed = DefaultPolicy.LoadRemoved(ResolveBaseDir());
-            bool removedChanged = false;
-            foreach (var ip in newlyUnblocked)
-            {
-                FirewallManager.RemoveBlockRule(ip);
-                if (DefaultPolicy.IsDefaultBlockedKey(ip) && removed.Add(DefaultPolicy.BlockKey(ip)))
-                    removedChanged = true;
-            }
-            if (removedChanged) DefaultPolicy.SaveRemoved(ResolveBaseDir(), removed);
-        }
-
-        AnsiConsole.MarkupLine($"[green]Saved. Blocked: {newlyBlocked.Count} added, {newlyUnblocked.Count} removed.[/]");
-        Thread.Sleep(1000);
-    }
 
     /// <summary>
     /// Fix #2: Corrected auto-kill logic (was inverted).
@@ -1579,143 +1095,6 @@ class Program
                 }
             }
         }
-    }
-
-    static void ManageSystemSettingsInteractive()
-    {
-        while (true)
-        {
-            AnsiConsole.Clear();
-            var syncEnabled = SystemSettingsManager.IsLanguageSyncEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-            var widgetsEnabled = SystemSettingsManager.IsWidgetsEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-            var searchEnabled = SystemSettingsManager.IsSearchHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-            var searchBgBingStatus = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled() ? "[red]Disabled[/]" : "[green]Enabled[/]";
-            var startMenuEnabled = SystemSettingsManager.IsStartMenuExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-            var shellExpEnabled = SystemSettingsManager.IsShellExperienceHostEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-            var telemetryEnabled = SystemSettingsManager.IsTelemetryEnabled() ? "[green]Enabled[/]" : "[red]Disabled[/]";
-
-            var prompt = new SelectionPrompt<string>()
-                .Title("[bold cyan]System Settings Management[/]\nSelect an option to toggle:")
-                .AddChoices(
-                    $"Toggle App Telemetry (Current: {telemetryEnabled})",
-                    $"Toggle Language Sync (Current: {syncEnabled})",
-                    $"Toggle Windows Widgets (Current: {widgetsEnabled})",
-                    $"Toggle SearchHost Box (Current: {searchEnabled})",
-                    $"Toggle SearchHost Background & Bing Search (Current: {searchBgBingStatus})",
-                    $"Toggle StartMenuExperienceHost (Current: {startMenuEnabled})",
-                    $"Toggle ShellExperienceHost (Current: {shellExpEnabled})",
-                    "Stop SettingSyncHost Process",
-                    "Stop Widgets Process",
-                    "Stop SearchHost Process",
-                    "Stop StartMenuExperienceHost Process",
-                    "Stop ShellExperienceHost Process",
-                    "Back to Monitor"
-                );
-
-            var selection = AnsiConsole.Prompt(prompt);
-
-            if (selection == "Back to Monitor") break;
-
-            if (selection.StartsWith("Toggle App Telemetry"))
-            {
-                bool newState = !SystemSettingsManager.IsTelemetryEnabled();
-                SystemSettingsManager.SetTelemetryEnabled(newState);
-                AnsiConsole.MarkupLine($"App Telemetry set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-            }
-            else if (selection.StartsWith("Toggle Language Sync"))
-            {
-                bool newState = !SystemSettingsManager.IsLanguageSyncEnabled();
-                SystemSettingsManager.SetLanguageSyncEnabled(newState);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false); // manual change → stop re-asserting defaults
-                AnsiConsole.MarkupLine($"Language Sync set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-                if (!newState) SystemSettingsManager.StopProcess("SettingSyncHost");
-            }
-            else if (selection.StartsWith("Toggle Windows Widgets"))
-            {
-                bool newState = !SystemSettingsManager.IsWidgetsEnabled();
-                SystemSettingsManager.SetWidgetsEnabled(newState);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
-                AnsiConsole.MarkupLine($"Widgets set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-                if (!newState) SystemSettingsManager.StopProcess("Widgets");
-            }
-            else if (selection.StartsWith("Toggle SearchHost Box"))
-            {
-                bool newState = !SystemSettingsManager.IsSearchHostEnabled();
-                SystemSettingsManager.SetSearchHostEnabled(newState);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
-                AnsiConsole.MarkupLine($"SearchHost Box set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-                if (!newState) SystemSettingsManager.StopProcess("SearchHost");
-            }
-            else if (selection.StartsWith("Toggle SearchHost Background & Bing Search"))
-            {
-                bool currentlyDisabled = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled();
-                bool newStateDisable = !currentlyDisabled;
-                SystemSettingsManager.SetSearchHostBackgroundAndBingDisabled(newStateDisable);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
-                AnsiConsole.MarkupLine($"SearchHost Background & Bing Search suggestions set to {(newStateDisable ? "[red]Disabled[/]" : "[green]Enabled[/]")}.");
-                if (newStateDisable) SystemSettingsManager.StopProcess("SearchHost");
-            }
-            else if (selection.StartsWith("Toggle StartMenuExperienceHost"))
-            {
-                bool newState = !SystemSettingsManager.IsStartMenuExperienceHostEnabled();
-                SystemSettingsManager.SetStartMenuExperienceHostEnabled(newState);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
-                AnsiConsole.MarkupLine($"StartMenuExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-                if (!newState) SystemSettingsManager.StopProcess("StartMenuExperienceHost");
-            }
-            else if (selection.StartsWith("Toggle ShellExperienceHost"))
-            {
-                bool newState = !SystemSettingsManager.IsShellExperienceHostEnabled();
-                SystemSettingsManager.SetShellExperienceHostEnabled(newState);
-                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
-                AnsiConsole.MarkupLine($"ShellExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
-                if (!newState) SystemSettingsManager.StopProcess("ShellExperienceHost");
-            }
-            else if (selection.StartsWith("Stop SettingSyncHost Process"))
-            {
-                SystemSettingsManager.StopProcess("SettingSyncHost");
-            }
-            else if (selection.StartsWith("Stop Widgets Process"))
-            {
-                SystemSettingsManager.StopProcess("Widgets");
-            }
-            else if (selection.StartsWith("Stop SearchHost Process"))
-            {
-                SystemSettingsManager.StopProcess("SearchHost");
-            }
-            else if (selection.StartsWith("Stop StartMenuExperienceHost Process"))
-            {
-                SystemSettingsManager.StopProcess("StartMenuExperienceHost");
-            }
-            else if (selection.StartsWith("Stop ShellExperienceHost Process"))
-            {
-                SystemSettingsManager.StopProcess("ShellExperienceHost");
-            }
-
-            Thread.Sleep(1500);
-        }
-    }
-
-    static void RestoreFirewallConfigurationInteractive()
-    {
-        var prompt = new SelectionPrompt<string>()
-            .Title("[bold red]WARNING:[/] This will disable all active firewall rules and restore only the explicit Chrome block rule. Proceed?")
-            .AddChoices("Yes, restore and disable others", "Cancel");
-
-        var selection = AnsiConsole.Prompt(prompt);
-        if (selection == "Cancel") return;
-
-        try
-        {
-            AnsiConsole.MarkupLine("[cyan]Disabling existing rules and applying hardcoded configuration...[/]");
-            FirewallManager.RestoreHardcodedConfiguration();
-            AnsiConsole.MarkupLine("[green]Configuration restored successfully.[/]");
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Failed: {Markup.Escape(ex.Message)}[/]");
-        }
-        Thread.Sleep(2000);
     }
 
     #endregion

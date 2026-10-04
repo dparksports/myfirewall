@@ -8,7 +8,7 @@
 
 MyFirewall watches the Windows kernel directly — every process start and every TCP/IP event streams through ETW in real time — and turns what it sees into enforced Windows Firewall rules through the native `INetFwPolicy2` COM API. No PowerShell child processes, no drivers to install, no cloud dependency in the enforcement path. It ships as two frontends over one engine: a **Spectre.Console CLI dashboard** and a **WPF dark-mode desktop control center**, both self-contained .NET 10 binaries for Windows 10/11 x64.
 
-- **[Features](#-features)** · **[Default security posture](#-default-security-posture)** · **[Policy files](#-policy-files)** · **[CLI usage](#-cli-usage)** · **[Build](#-build--installation)** · **[Architecture](#-architecture)**
+- **[Features](#-features)** · **[Default security posture](#-default-security-posture)** · **[Policy files](#-policy-files)** · **[CLI TUI](#%EF%B8%8F-cli-tui)** · **[Build](#-build--installation)** · **[Architecture](#-architecture)**
 
 ---
 
@@ -25,7 +25,7 @@ MyFirewall watches the Windows kernel directly — every process start and every
 - **AutoEnforce loop** — any new destination IP contacted by a blocked process is firewall-blocked instantly and its live sockets reset via `SetTcpEntry`.
 
 ### 🖥️ Two frontends, one engine
-- **CLI dashboard** — live connection tables, color-coded ETW status, alert log, interactive prompts for every list (see [keybindings](#-cli-keybindings)).
+- **CLI dashboard** — cursor-driven live tables with tabs, filtering, overlay modals, and a color-coded alert log.
 - **Desktop control center** — WPF dark dashboard with real-time search, smart-diff updates (no grid flicker), process ancestry, Authenticode signature status, and one-click hardening toggles.
 
 ### 🔍 Process intelligence
@@ -66,20 +66,27 @@ All state lives next to the executable — portable, human-readable, no installe
 
 ---
 
-## 🖥️ CLI keybindings
+## 🖥️ CLI TUI
+
+The CLI is a state-machine terminal app rendered as a single atomic frame (flicker-free `Live` rendering, no screen-clearing wizards): a **row cursor** over the live feed, **tabs**, an instant **filter**, and **overlay panels** for details, confirmations and help — the live feed keeps refreshing behind them.
+
+**Tabs:** `1` All · `2` Outbound · `3` Inbound · `4` Blocked rules · `5` Ignored · `6` Alert log · `7` Domain cache · `S` System settings
 
 | Key | Action |
 |---|---|
-| `Q` | Graceful stop & exit |
-| `K` | Interactively kill process trees |
-| `B` | Manage blocked IP rules (multi-select) |
-| `I` | Manage ignored application list |
-| `P` | Inspect process ancestry & digital signatures |
-| `S` | System settings & hardening toggles |
+| `↑`/`↓` / `PgUp`/`PgDn` | Move / page the row cursor (auto-scrolls) |
+| `1`–`7`, `S` | Switch tab / open system settings |
+| `Enter` / `P` | Threat-intelligence detail for the selected connection |
+| `B` | Firewall-block the selected connection's IP |
+| `K` | Kill the selected process tree (confirm overlay) |
+| `I` | Ignore the selected process |
+| `/` | Filter the live feed (process, IP, domain, geo) — `Esc` clears |
+| `X` / `Space` / `A` | Remove / add entries on the Blocked & Ignored tabs |
+| `C` | Clear the alert log |
 | `T` | Toggle monitoring strategy (connection-driven ⇄ process-start ETW) |
-| `L` | Toggle data tables |
-| `R` | Restore default firewall rules |
-| `H` / `F1` | Help modal |
+| `R` | Restore hardcoded firewall rules (confirm overlay) |
+| `H` / `F1` / `?` | Help overlay |
+| `Q` | Graceful stop & exit |
 
 ```bash
 MyFirewall.exe --refresh 3   # optional refresh interval in seconds
