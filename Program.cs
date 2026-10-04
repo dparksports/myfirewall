@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using DefaultPolicy = MyFirewall.Desktop.Services.DefaultPolicy;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Windows Firewall COM interop types  (replaces powershell.exe spawning)
@@ -988,6 +989,7 @@ class Program
         LoadAllData();
         RebuildBlockedProcessNames();
         ApplyProactiveProcessBlocks(); // Block processes already running at launch, before ETW starts
+        ApplyStartupHardeningDefaults(); // Disable language sync / widgets / SearchHost / StartMenu & Shell hosts by default
         _etwTracker = new EtwNetworkTracker();
         _etwTracker.OnProactiveAlert = alertMsg =>
         {
@@ -1426,7 +1428,9 @@ class Program
         var conns     = GetTcpConnections();
         var activeIPs = conns.GroupBy(c => c.RemoteIP)
                              .ToDictionary(g => g.Key, g => g.First().ProcessName);
-        var allIPs    = activeIPs.Keys.Union(_blockedIPs.Keys).Distinct().OrderBy(x => x).ToList();
+        // Process-name entries (default policy blocks) live in _blockedIPs too, but
+        // this screen manages IP rules only — keep them out of the selectable set.
+        var allIPs    = activeIPs.Keys.Union(_blockedIPs.Keys).Where(IsValidIP).Distinct().OrderBy(x => x).ToList();
 
         if (allIPs.Count == 0) { AnsiConsole.MarkupLine("[grey]No IPs available.[/]"); Thread.Sleep(800); return; }
 
@@ -1460,7 +1464,7 @@ class Program
         }
 
         var newlyBlocked   = selectedIPs.Except(_blockedIPs.Keys).ToList();
-        var newlyUnblocked = _blockedIPs.Keys.Except(selectedIPs).ToList();
+        var newlyUnblocked = _blockedIPs.Keys.Except(selectedIPs).Where(IsValidIP).ToList();
 
         var newDict = new Dictionary<string, BlockedIPMetadata>();
         foreach (var s in selected)
@@ -1490,6 +1494,13 @@ class Program
             }
         }
 
+        // Preserve explicit process-name entries (e.g. default policy process blocks) —
+        // this screen only rewrites IP entries.
+        foreach (var kvp in _blockedIPs)
+        {
+            if (!IsValidIP(kvp.Key)) newDict[kvp.Key] = kvp.Value;
+        }
+
         _blockedIPs = newDict;
         RebuildBlockedProcessNames();
         SaveBlockList();
@@ -1510,8 +1521,19 @@ class Program
             }
         }
 
-        foreach (var ip in newlyUnblocked)
-            FirewallManager.RemoveBlockRule(ip);
+        if (newlyUnblocked.Count > 0)
+        {
+            // Remember explicit opt-outs so default-policy seeding never re-adds them.
+            var removed = DefaultPolicy.LoadRemoved(ResolveBaseDir());
+            bool removedChanged = false;
+            foreach (var ip in newlyUnblocked)
+            {
+                FirewallManager.RemoveBlockRule(ip);
+                if (DefaultPolicy.IsDefaultBlockedKey(ip) && removed.Add(DefaultPolicy.BlockKey(ip)))
+                    removedChanged = true;
+            }
+            if (removedChanged) DefaultPolicy.SaveRemoved(ResolveBaseDir(), removed);
+        }
 
         AnsiConsole.MarkupLine($"[green]Saved. Blocked: {newlyBlocked.Count} added, {newlyUnblocked.Count} removed.[/]");
         Thread.Sleep(1000);
@@ -1604,6 +1626,7 @@ class Program
             {
                 bool newState = !SystemSettingsManager.IsLanguageSyncEnabled();
                 SystemSettingsManager.SetLanguageSyncEnabled(newState);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false); // manual change → stop re-asserting defaults
                 AnsiConsole.MarkupLine($"Language Sync set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("SettingSyncHost");
             }
@@ -1611,6 +1634,7 @@ class Program
             {
                 bool newState = !SystemSettingsManager.IsWidgetsEnabled();
                 SystemSettingsManager.SetWidgetsEnabled(newState);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
                 AnsiConsole.MarkupLine($"Widgets set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("Widgets");
             }
@@ -1618,6 +1642,7 @@ class Program
             {
                 bool newState = !SystemSettingsManager.IsSearchHostEnabled();
                 SystemSettingsManager.SetSearchHostEnabled(newState);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
                 AnsiConsole.MarkupLine($"SearchHost Box set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("SearchHost");
             }
@@ -1626,6 +1651,7 @@ class Program
                 bool currentlyDisabled = SystemSettingsManager.IsSearchHostBackgroundAndBingDisabled();
                 bool newStateDisable = !currentlyDisabled;
                 SystemSettingsManager.SetSearchHostBackgroundAndBingDisabled(newStateDisable);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
                 AnsiConsole.MarkupLine($"SearchHost Background & Bing Search suggestions set to {(newStateDisable ? "[red]Disabled[/]" : "[green]Enabled[/]")}.");
                 if (newStateDisable) SystemSettingsManager.StopProcess("SearchHost");
             }
@@ -1633,6 +1659,7 @@ class Program
             {
                 bool newState = !SystemSettingsManager.IsStartMenuExperienceHostEnabled();
                 SystemSettingsManager.SetStartMenuExperienceHostEnabled(newState);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
                 AnsiConsole.MarkupLine($"StartMenuExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("StartMenuExperienceHost");
             }
@@ -1640,6 +1667,7 @@ class Program
             {
                 bool newState = !SystemSettingsManager.IsShellExperienceHostEnabled();
                 SystemSettingsManager.SetShellExperienceHostEnabled(newState);
+                SystemSettingsManager.SetHardeningDefaultsEnabled(false);
                 AnsiConsole.MarkupLine($"ShellExperienceHost set to {(newState ? "[green]Enabled[/]" : "[red]Disabled[/]")}.");
                 if (!newState) SystemSettingsManager.StopProcess("ShellExperienceHost");
             }
@@ -2011,21 +2039,93 @@ class Program
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     var parts = line.Split('|');
-                    string ip = parts[0].Trim();
-                    if (IsValidIP(ip)) // Fix #16: validate on load
+                    string key = parts[0].Trim();
+                    if (string.IsNullOrEmpty(key)) continue;
+
+                    string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                    DateTime timestamp = DateTime.Now;
+                    if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt))
                     {
-                        string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
-                        DateTime timestamp = DateTime.Now;
-                        if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt))
-                        {
-                            timestamp = dt;
-                        }
-                        _blockedIPs[ip] = new BlockedIPMetadata { ProcessName = app, Timestamp = timestamp };
+                        timestamp = dt;
                     }
+
+                    // Valid IPs are blocked by address; anything else is an explicit
+                    // process-name entry (e.g. default policy process blocks such as
+                    // MpCmdRun / MsMpEng / StartMenuExperienceHost).
+                    _blockedIPs[key] = new BlockedIPMetadata { ProcessName = app, Timestamp = timestamp };
                 }
             }
+
+            SeedDefaultPolicy();
         }
         catch (Exception ex) { LogCrash($"LoadAllData: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Seeds the built-in default policy (adopted block list + default process blocks)
+    /// into _blockedIPs. Existing user entries win, and entries recorded in
+    /// defaults_removed.txt (explicit un-block opt-outs) are never re-added.
+    /// </summary>
+    static void SeedDefaultPolicy()
+    {
+        try
+        {
+            var removed = DefaultPolicy.LoadRemoved(ResolveBaseDir());
+
+            foreach (var line in DefaultPolicy.DefaultBlockedIps)
+            {
+                var parts = line.Split('|');
+                string key = parts[0].Trim();
+                if (string.IsNullOrEmpty(key)) continue;
+                if (removed.Contains(DefaultPolicy.BlockKey(key)) || _blockedIPs.ContainsKey(key)) continue;
+
+                string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                DateTime timestamp = DateTime.Now;
+                if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt)) timestamp = dt;
+                _blockedIPs[key] = new BlockedIPMetadata { ProcessName = app, Timestamp = timestamp };
+            }
+
+            foreach (var (key, app) in DefaultPolicy.DefaultBlockedProcesses)
+            {
+                if (removed.Contains(DefaultPolicy.BlockKey(key)) || _blockedIPs.ContainsKey(key)) continue;
+                _blockedIPs[key] = new BlockedIPMetadata { ProcessName = app, Timestamp = DateTime.Now };
+            }
+        }
+        catch (Exception ex) { LogCrash($"SeedDefaultPolicy: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Applies the startup hardening defaults — language sync, Windows widgets,
+    /// SearchHost box, SearchHost background & Bing search, StartMenuExperienceHost and
+    /// ShellExperienceHost disabled, then the default kill list terminated — unless the
+    /// user manually changed a toggle (opt-out recorded in the master switch).
+    /// </summary>
+    static void ApplyStartupHardeningDefaults()
+    {
+        try
+        {
+            if (!SystemSettingsManager.IsHardeningDefaultsEnabled()) return;
+
+            SystemSettingsManager.SetLanguageSyncEnabled(false);
+            SystemSettingsManager.SetWidgetsEnabled(false);
+            SystemSettingsManager.SetSearchHostEnabled(false);
+            SystemSettingsManager.SetSearchHostBackgroundAndBingDisabled(true);
+            SystemSettingsManager.SetStartMenuExperienceHostEnabled(false);
+            SystemSettingsManager.SetShellExperienceHostEnabled(false);
+
+            var removed = DefaultPolicy.LoadRemoved(ResolveBaseDir());
+            foreach (var name in DefaultPolicy.DefaultKillProcesses)
+            {
+                if (removed.Contains(DefaultPolicy.KillKey(name))) continue;
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try { p.Kill(entireProcessTree: true); } catch { }
+                }
+            }
+
+            AnsiConsole.MarkupLine("[grey]Hardening defaults applied: language sync, widgets, SearchHost box/background & Bing, StartMenuExperienceHost and ShellExperienceHost disabled.[/]");
+        }
+        catch (Exception ex) { LogCrash($"ApplyStartupHardeningDefaults: {ex.Message}"); }
     }
 
     static void RebuildBlockedProcessNames()
@@ -2306,6 +2406,36 @@ static class SystemSettingsManager
             key.SetValue("SearchboxTaskbarMode", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
         }
         catch (Exception ex) { Program.LogCrash($"SetSearchHostEnabled: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Master switch for the startup hardening defaults (HKLM\SOFTWARE\Policies\MyFirewall).
+    /// Absent value means enabled: defaults apply until the user manually changes a
+    /// toggle, which records an opt-out so startup stops re-asserting.
+    /// </summary>
+    public static bool IsHardeningDefaultsEnabled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\MyFirewall");
+            if (key != null)
+            {
+                var val = key.GetValue("ApplyHardeningDefaults");
+                if (val is int i && i == 0) return false;
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void SetHardeningDefaultsEnabled(bool enable)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\MyFirewall");
+            key.SetValue("ApplyHardeningDefaults", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Program.LogCrash($"SetHardeningDefaultsEnabled: {ex.Message}"); }
     }
 
     public static bool IsSearchHostBackgroundAndBingDisabled()

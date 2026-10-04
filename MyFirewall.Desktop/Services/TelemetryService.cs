@@ -18,7 +18,7 @@ namespace MyFirewall.Desktop.Services
         private const string Endpoint = $"https://www.google-analytics.com/mp/collect?measurement_id={MeasurementId}&api_secret={ApiSecret}";
         
         private const string RegKeyPath = @"Software\MyFirewall";
-        private string _clientId;
+        private string _clientId = "";
 
         public TelemetryService()
         {
@@ -57,7 +57,7 @@ namespace MyFirewall.Desktop.Services
             try
             {
                 using var key = Registry.CurrentUser.CreateSubKey(RegKeyPath);
-                _clientId = key?.GetValue("ClientId") as string;
+                _clientId = key?.GetValue("ClientId") as string ?? "";
                 if (string.IsNullOrEmpty(_clientId))
                 {
                     _clientId = Guid.NewGuid().ToString();
@@ -70,7 +70,7 @@ namespace MyFirewall.Desktop.Services
             }
         }
 
-        public async Task TrackEventAsync(string eventName, Dictionary<string, object> parameters = null)
+        public async Task TrackEventAsync(string eventName, Dictionary<string, object>? parameters = null)
         {
             if (!IsTelemetryEnabled) return;
 

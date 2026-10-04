@@ -77,3 +77,12 @@ publish_cli_single/
 publish_desktop_single/
 blocked copy.txt
 blocked-fidelity.txt
+
+# Runtime policy state & logs (defaults now seed these automatically)
+ignored.txt
+kill.txt
+defaults_removed.txt
+*.log
+
+# WPF temporary build project files
+*wpftmp.csproj

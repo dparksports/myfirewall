@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1600px; height: 900px; overflow: hidden;
+    font-family: "Segoe UI", "Segoe UI Emoji", sans-serif;
+    background:
+      radial-gradient(ellipse 900px 500px at 85% -10%, rgba(34,211,238,.14), transparent 60%),
+      radial-gradient(ellipse 800px 500px at 5% 110%, rgba(239,68,68,.10), transparent 60%),
+      linear-gradient(160deg, #0a0f1c 0%, #0d1526 55%, #0a101e 100%);
+    color: #e6edf6;
+    display: flex; flex-direction: column;
+    padding: 52px 64px;
+  }
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(148,163,184,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,163,184,.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+    z-index: 0;
+  }
+  .content { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100%; }
+
+  /* ── Header ─────────────────────────────────────────── */
+  .header { display: flex; align-items: center; gap: 28px; }
+  .shield {
+    width: 96px; height: 112px; flex-shrink: 0;
+    filter: drop-shadow(0 6px 18px rgba(34,211,238,.35));
+  }
+  .title-block { flex: 1; }
+  .brand-row { display: flex; align-items: baseline; gap: 18px; }
+  h1 { font-size: 64px; font-weight: 800; letter-spacing: 2px; }
+  h1 .accent { color: #22d3ee; }
+  .ver {
+    font-size: 20px; font-weight: 700; color: #0a0f1c;
+    background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+    padding: 4px 14px; border-radius: 20px; letter-spacing: 1px;
+  }
+  .tagline { font-size: 22px; color: #94a3b8; margin-top: 8px; font-weight: 400; }
+  .tagline b { color: #e6edf6; font-weight: 600; }
+  .platform {
+    text-align: right; font-size: 16px; color: #64748b; line-height: 1.7;
+  }
+  .platform .ok { color: #34d399; font-weight: 600; }
+
+  /* ── Cards ──────────────────────────────────────────── */
+  .cards {
+    margin-top: 40px; flex: 1;
+    display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr);
+    gap: 22px;
+  }
+  .card {
+    background: rgba(15, 23, 42, .72);
+    border: 1px solid rgba(148, 163, 184, .18);
+    border-top: 3px solid var(--ac, #22d3ee);
+    border-radius: 14px;
+    padding: 22px 24px;
+    display: flex; flex-direction: column;
+  }
+  .card .icon { font-size: 26px; margin-bottom: 10px; }
+  .card h2 { font-size: 20.5px; font-weight: 700; color: var(--ac, #22d3ee); margin-bottom: 8px; letter-spacing: .3px; }
+  .card p { font-size: 15.5px; line-height: 1.5; color: #b6c2d4; }
+  .card p code {
+    font-family: Consolas, monospace; font-size: 13.5px; color: #7dd3fc;
+    background: rgba(34,211,238,.08); padding: 1px 6px; border-radius: 5px;
+  }
+
+  /* ── Footer ─────────────────────────────────────────── */
+  .footer {
+    margin-top: 34px;
+    border-top: 1px solid rgba(148,163,184,.16);
+    padding-top: 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .files { display: flex; gap: 12px; align-items: center; }
+  .file {
+    font-family: Consolas, monospace; font-size: 14.5px; color: #7dd3fc;
+    border: 1px dashed rgba(125,211,252,.45); border-radius: 8px; padding: 7px 13px;
+    background: rgba(34,211,238,.05);
+  }
+  .files-label { font-size: 14.5px; color: #64748b; margin-right: 6px; }
+  .made { font-size: 14.5px; color: #64748b; }
+  .made b { color: #94a3b8; }
+</style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="content">
+
+    <div class="header">
+      <svg class="shield" viewBox="0 0 96 112">
+        <defs>
+          <linearGradient id="sg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#0ea5e9"/>
+          </linearGradient>
+        </defs>
+        <path d="M48 4 L90 20 V54 C90 82 72 100 48 108 C24 100 6 82 6 54 V20 Z"
+              fill="none" stroke="url(#sg)" stroke-width="5"/>
+        <path d="M48 18 L78 29 V53 C78 74 65 88 48 95 C31 88 18 74 18 53 V29 Z"
+              fill="rgba(34,211,238,.10)" stroke="url(#sg)" stroke-width="2"/>
+        <path d="M34 55 L45 66 L64 42" fill="none" stroke="#34d399" stroke-width="6"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="title-block">
+        <div class="brand-row">
+          <h1>MY<span class="accent">FIREWALL</span></h1>
+          <span class="ver">v5.7.28</span>
+        </div>
+        <div class="tagline">Ultra-low latency <b>Windows network isolation</b> &amp; process security suite — kernel events to firewall rules in milliseconds.</div>
+      </div>
+      <div class="platform">
+        <div><span class="ok">&#9679;</span> Windows 10 / 11 (x64)</div>
+        <div>.NET 10 &nbsp;·&nbsp; Zero external dependencies</div>
+        <div>Administrator mode &nbsp;·&nbsp; MIT License</div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card" style="--ac:#22d3ee">
+        <div class="icon">&#9889;</div>
+        <h2>Kernel ETW Interception</h2>
+        <p>Real-time <code>ProcessStart</code> + TCP/IP kernel tracing. Target executables are firewall-blocked the millisecond they spawn — packets never leave the adapter.</p>
+      </div>
+      <div class="card" style="--ac:#ef4444">
+        <div class="icon">&#129517;</div>
+        <h2>Native COM Firewall Engine</h2>
+        <p>Direct <code>HNetCfg.FwPolicy2</code> interop — no <code>powershell.exe</code> child processes. Granular IP and whole-app blocks with UWP <code>LocalAppPackageId</code> isolation.</p>
+      </div>
+      <div class="card" style="--ac:#f59e0b">
+        <div class="icon">&#128737;</div>
+        <h2>Default Policy, Always On</h2>
+        <p>Adopted block list plus default process blocks (<code>MpCmdRun</code>, <code>MsMpEng</code>, <code>StartMenuExperienceHost</code>) and a startup kill list — enforced with zero clicks.</p>
+      </div>
+      <div class="card" style="--ac:#34d399">
+        <div class="icon">&#128421;</div>
+        <h2>Dual Interfaces</h2>
+        <p><b>Spectre.Console CLI</b> dashboard with live keybindings, and a <b>WPF dark-mode desktop</b> control center with process intelligence and one-click toggles.</p>
+      </div>
+      <div class="card" style="--ac:#a78bfa">
+        <div class="icon">&#128274;</div>
+        <h2>System Hardening Defaults</h2>
+        <p>Language sync, Windows Widgets, SearchHost box / background &amp; Bing suggestions, StartMenuExperienceHost and ShellExperienceHost — <b>disabled by default</b>, opt-out respected.</p>
+      </div>
+      <div class="card" style="--ac:#fb7185">
+        <div class="icon">&#128065;</div>
+        <h2>Ghost Sockets &amp; GeoIP</h2>
+        <p>Transient teardown sockets stay visible, every remote endpoint is enriched with GeoIP + reverse DNS, and AutoEnforce firewall-blocks new destinations of blocked processes.</p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="files">
+        <span class="files-label">Portable policy files:</span>
+        <span class="file">blocked.txt</span>
+        <span class="file">ignored.txt</span>
+        <span class="file">kill.txt</span>
+        <span class="file">defaults_removed.txt</span>
+      </div>
+      <div class="made">Made with &#10084;&#65039; in California &nbsp;·&nbsp; <b>dparksports/myfirewall</b></div>
+    </div>
+
+  </div>
+</body>
+</html>

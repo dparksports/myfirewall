@@ -1,129 +1,152 @@
+<p align="center">
+  <img src="assets/infographic.png" alt="MyFirewall — Windows network isolation & process security suite" width="100%">
+</p>
+
 # 🛡️ MyFirewall
 
-> **Ultra-Low Latency Windows Network Isolation & Process Security Suite**  
-> Powered by **.NET 10.0**, Native Windows Firewall COM (`INetFwPolicy2`), Real-Time Kernel Event Tracing (ETW), **Spectre.Console CLI**, and a Dark-Theme **WPF Desktop Dashboard**.
+**Ultra-low latency Windows network isolation & process security suite.**
+
+MyFirewall watches the Windows kernel directly — every process start and every TCP/IP event streams through ETW in real time — and turns what it sees into enforced Windows Firewall rules through the native `INetFwPolicy2` COM API. No PowerShell child processes, no drivers to install, no cloud dependency in the enforcement path. It ships as two frontends over one engine: a **Spectre.Console CLI dashboard** and a **WPF dark-mode desktop control center**, both self-contained .NET 10 binaries for Windows 10/11 x64.
+
+- **[Features](#-features)** · **[Default security posture](#-default-security-posture)** · **[Policy files](#-policy-files)** · **[CLI usage](#-cli-usage)** · **[Build](#-build--installation)** · **[Architecture](#-architecture)**
 
 ---
 
-![MyFirewall Architecture & System Overview](assets/infographic.png)
+## ✨ Features
+
+### ⚡ Real-time kernel event tracing (ETW)
+- Captures `ProcessStart` and per-PID TCP/IP byte counters via a kernel `TraceEventSession`.
+- **Zero-escape enforcement** — a firewall rule is applied the millisecond a target executable spawns, before its packets reach the adapter.
+- IPv4 **and** IPv6 TCP tables read through `iphlpapi` with socket-to-PID correlation and ghost-socket tracking during teardown.
+
+### 🧱 Native COM firewall engine
+- Direct `HNetCfg.FwPolicy2` / `HNetCfg.FWRule` interop — rule add/remove/enumerate without spawning `powershell.exe`.
+- IP blocks are created as four rules each (TCP/UDP × inbound/outbound); whole-application blocks resolve UWP **Package Family Names** and use native `LocalAppPackageId` isolation for system apps such as `StartMenuExperienceHost`.
+- **AutoEnforce loop** — any new destination IP contacted by a blocked process is firewall-blocked instantly and its live sockets reset via `SetTcpEntry`.
+
+### 🖥️ Two frontends, one engine
+- **CLI dashboard** — live connection tables, color-coded ETW status, alert log, interactive prompts for every list (see [keybindings](#-cli-keybindings)).
+- **Desktop control center** — WPF dark dashboard with real-time search, smart-diff updates (no grid flicker), process ancestry, Authenticode signature status, and one-click hardening toggles.
+
+### 🔍 Process intelligence
+- Executable path resolution, parent process trees, and digital-signature verdicts for every connection.
+- GeoIP + reverse-DNS enrichment with caching and throttling.
+- Proactive WebView2 spawn analysis — every `msedgewebview2.exe` launch is attributed to its parent (Search UI, Widgets, Edge) and can be network-isolated app-wide with one toggle.
+
+### 🔒 OS hardening controls
+One-click, reversible registry-backed toggles for the noisy parts of Windows: **language sync, Windows Widgets, the taskbar SearchHost box, SearchHost background activity & Bing search suggestions, StartMenuExperienceHost, ShellExperienceHost**, plus a proactive outbound block for WebView2.
 
 ---
 
-## 🚀 Overview
+## 🛡️ Default security posture
 
-**MyFirewall** is a lightweight, high-performance network monitor and process security suite for Windows. Designed for system administrators, security engineers, and power users, MyFirewall combines real-time kernel-level process interception with direct COM-level firewall rule management—providing zero-escape network enforcement without external dependencies or heavy background overhead.
+MyFirewall does not start empty. A built-in **default policy** (single source of truth: [`MyFirewall.Desktop/Services/DefaultPolicy.cs`](MyFirewall.Desktop/Services/DefaultPolicy.cs), compiled into both frontends) is seeded on every launch:
 
----
+| Default | Contents |
+|---|---|
+| **Blocked IPs** | The adopted block list — known Defender/GameBar/Widgets/SearchHost/StartMenu/WebView2 telemetry endpoints, seeded verbatim from the currently configured `blocked.txt` |
+| **Blocked processes** | `MpCmdRun`, `MsMpEng`, `StartMenuExperienceHost` — blocked by name; every new destination they touch is firewall-blocked automatically |
+| **Kill list** (`kill.txt`) | `SettingSyncHost`, `Widgets`, `SearchHost`, `StartMenuExperienceHost`, `ShellExperienceHost` — terminated when hardening applies |
+| **Hardening defaults** | Language sync, Widgets, SearchHost box, SearchHost background & Bing search, StartMenuExperienceHost and ShellExperienceHost all **disabled** at startup |
 
-## ✨ Core Capabilities
-
-### ⚡ Real-Time Kernel Event Tracing (ETW)
-* **Instant Process Interception**: Captures kernel `ProcessStart` and network events via `Microsoft.Diagnostics.Tracing.TraceEvent`.
-* **Zero-Escape Enforcement**: Applies firewall rules the millisecond a target executable spawns—preventing network packets from leaving the adapter.
-* **UWP & AppContainer Support**: Automatically resolves Package Family Names (PFN) for modern Windows Apps (e.g., `StartMenuExperienceHost`) to apply native `LocalAppPackageId` firewall isolation.
-* **Ghost Connection Tracking**: Automatically highlights decaying sockets during Windows TCP teardown with visual opacity hints.
-
-### 🧱 Native COM Windows Firewall Engine
-* **Direct COM Interop**: Interacts directly with `HNetCfg.FwPolicy2` and `HNetCfg.FWRule` COM objects without relying on slow `powershell.exe` child processes.
-* **Granular Process Isolation**: Severs specific network endpoints or blocks entire application executables natively.
-* **System Component Shields**: Quick toggles to isolate or block system telemetry services like `msedgewebview2.exe` and UWP system hosts.
-
-### 🖥️ Dual Modern User Interfaces
-
-#### 1. Spectre.Console Terminal UI
-* **Interactive CLI Dashboard**: Live TCP connection tables, color-coded ETW status indicators, thread-safe alert logs, and instant keyboard shortcuts.
-* **Quick Keybindings**:
-  * `Q` — Gracefully stop & exit
-  * `K` — Interactively kill process trees
-  * `B` — Manage blocked IP rules
-  * `I` — Manage ignored application lists
-  * `P` — Inspect process ancestry & digital signatures
-  * `S` — System settings & telemetry toggles
-  * `T` — Toggle threat monitoring strategy
-  * `L` — Toggle viewable data tables
-  * `R` — Reset & restore default firewall rules
-  * `H / F1` — Interactive help modal
-
-#### 2. WPF Dark-Mode Desktop App
-* **Visual Control Center**: Modern dark dashboard with search & filtering across active connections.
-* **Process Intelligence**: Deep inspection including digital certificates, executable path resolution, parent process trees, and dynamic bandwidth metrics.
-* **One-Click Toggles**: Quick controls for system host isolation, telemetry shielding, and IP block lists.
+**Defaults never fight the user.** Un-blocking a default entry records an opt-out in `defaults_removed.txt`, and manually changing any hardening toggle flips the master switch (`HKLM\SOFTWARE\Policies\MyFirewall\ApplyHardeningDefaults`) so startup stops re-asserting. Delete the opt-out (or set the value back to `1`) to return to the default posture.
 
 ---
 
-## 🏗️ System Architecture
+## 📄 Policy files
 
-```mermaid
-graph TD
-    subgraph Kernel & System Layer
-        Kernel["Windows Kernel Event Tracing (ETW)"]
-        WinFW["Windows Firewall Engine (INetFwPolicy2 / INetFwRule3)"]
-    end
+All state lives next to the executable — portable, human-readable, no installer database:
 
-    subgraph Core Engine
-        ETW["EtwNetworkTracker"]
-        Resolver["UWP Package Family Name (PFN) Resolver"]
-        GeoService["GeoIP & Process Metadata Service"]
-        FwService["FirewallService (Native COM)"]
-    end
+| File | Format | Purpose |
+|---|---|---|
+| `blocked.txt` | `IP\|Process\|timestamp` (non-IP key = blocked process) | Firewall-block list; auto-enforced |
+| `ignored.txt` | one app name per line | Trusted apps hidden from the live feed |
+| `kill.txt` | one process name per line | Processes terminated when hardening defaults apply |
+| `defaults_removed.txt` | `block:<key>` / `kill:<name>` | Your explicit opt-outs from the built-in defaults |
 
-    subgraph Frontends
-        CLI["Spectre.Console CLI App"]
-        WPF["WPF Desktop App"]
-    end
+---
 
-    Kernel -->|Process & Socket Events| ETW
-    ETW -->|Active Sockets| GeoService
-    GeoService -->|Enriched Data| CLI
-    GeoService -->|Enriched Data| WPF
-    
-    CLI -->|Block Process / IP| FwService
-    WPF -->|Block Process / IP| FwService
-    
-    FwService -->|Extract PFN for UWP| Resolver
-    Resolver -->|LocalAppPackageId / AppPath| FwService
-    FwService -->|COM Interop| WinFW
+## 🖥️ CLI keybindings
+
+| Key | Action |
+|---|---|
+| `Q` | Graceful stop & exit |
+| `K` | Interactively kill process trees |
+| `B` | Manage blocked IP rules (multi-select) |
+| `I` | Manage ignored application list |
+| `P` | Inspect process ancestry & digital signatures |
+| `S` | System settings & hardening toggles |
+| `T` | Toggle monitoring strategy (connection-driven ⇄ process-start ETW) |
+| `L` | Toggle data tables |
+| `R` | Restore default firewall rules |
+| `H` / `F1` | Help modal |
+
+```bash
+MyFirewall.exe --refresh 3   # optional refresh interval in seconds
 ```
 
 ---
 
-## 🛠️ Build & Installation
+## 🏗️ Build & installation
 
-### Requirements
-* **Windows 10 / 11** (64-bit)
-* **.NET 10.0 SDK**
-* **Administrator Privileges** (Required for ETW kernel session creation and Windows Firewall COM management)
-
-### Build Commands
+**Requirements:** Windows 10/11 x64, .NET 10 SDK, Administrator privileges (ETW kernel sessions and firewall COM need elevation).
 
 ```powershell
-# Clone the repository
 git clone https://github.com/dparksports/myfirewall.git
 cd myfirewall
 
-# Build the CLI application
+# CLI
 dotnet build MyFirewall.csproj -c Release
 
-# Build the WPF Desktop application
+# WPF Desktop app
 dotnet build MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release
 
-# Publish self-contained single-file binaries
-dotnet publish MyFirewall.csproj -c Release -r win-x64 --self-contained -o ./publish/cli
+# Self-contained single-file publish (both)
+dotnet publish MyFirewall.csproj                -c Release -r win-x64 --self-contained -o ./publish/cli
 dotnet publish MyFirewall.Desktop/MyFirewall.Desktop.csproj -c Release -r win-x64 --self-contained -o ./publish/desktop
+```
+
+Grab a ready-to-run build from the [Releases page](https://github.com/dparksports/myfirewall/releases) — each release ships `release_cli_win_x64.zip` and `release_desktop_win_x64.zip`, fully self-contained (no .NET install required). Run as Administrator.
+
+### Automated release
+
+```powershell
+.\release.ps1 -BumpType Patch          # version bump → publish → zip → tag → GitHub release
+.\release.ps1 -DryRun                  # preview without changes
+```
+
+Requires `GITHUB_TOKEN` (or `-Token`) for the release API call. A UAC manifest sidecar (`<App>.exe.manifest`) is copied next to each published binary so elevation survives single-file publish.
+
+### Infographics
+
+The banners in this README are generated from HTML sources with headless Edge:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File assets\render_infographics.ps1
 ```
 
 ---
 
-## 📦 Automated Release
+## 🏛️ Architecture
 
-To automatically bump the version, build self-contained binaries, zip artifacts, commit changes, tag, and publish a GitHub release:
+<p align="center">
+  <img src="assets/architecture.png" alt="MyFirewall system architecture" width="100%">
+</p>
 
-```powershell
-.\release.ps1 -BumpType Patch
+```
+Frontends        CLI (Spectre.Console)   ·   WPF Desktop (MVVM)
+                     │  commands & policy
+Core Services    NetworkMonitorService (ETW) · ProcessMetadataService · DefaultPolicy + DataService · GeoIpService
+                     │  enforcement
+Enforcement      FirewallService (INetFwPolicy2 COM) · AutoEnforce loop · SystemSettingsService (registry/IFEO)
+                     │  kernel & OS
+Windows          ETW kernel provider · Windows Filtering Platform · Registry policy store
 ```
 
 ---
 
 ## 📜 License
 
-This project is open source under the [MIT License](LICENSE).
+Distributed under the [Apache License 2.0](LICENSE).
+
+<p align="center"><i>Made with ❤️ in California.</i></p>

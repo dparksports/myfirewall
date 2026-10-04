@@ -12,6 +12,8 @@ namespace MyFirewall.Desktop.Services
     {
         private readonly string _blockedFile;
         private readonly string _ignoredFile;
+        private readonly string _killFile;
+        private readonly string _baseDir;
         private readonly string _crashLogFile;
         private readonly Action<string> _logError;
 
@@ -22,8 +24,10 @@ namespace MyFirewall.Desktop.Services
             // Fix #8: Resolve the data directory relative to the running executable rather
             // than using a fragile "../../../../" chain that breaks under publish/flat installs.
             string baseDir = ResolveBaseDir();
+            _baseDir      = baseDir;
             _blockedFile  = Path.Combine(baseDir, "blocked.txt");
             _ignoredFile  = Path.Combine(baseDir, "ignored.txt");
+            _killFile     = Path.Combine(baseDir, "kill.txt");
             _crashLogFile = Path.Combine(baseDir, "crash.log");
         }
 
@@ -97,6 +101,74 @@ namespace MyFirewall.Desktop.Services
         {
             try { File.WriteAllLines(_ignoredFile, ignoredApps); }
             catch (Exception ex) { _logError($"SaveIgnoreList: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Loads the kill list (process names terminated when hardening defaults apply).
+        /// </summary>
+        public HashSet<string> LoadKillList()
+        {
+            var kill = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(_killFile))
+                {
+                    foreach (var line in File.ReadAllLines(_killFile))
+                    {
+                        if (!string.IsNullOrWhiteSpace(line)) kill.Add(line.Trim());
+                    }
+                }
+            }
+            catch (Exception ex) { _logError($"LoadKillList: {ex.Message}"); }
+            return kill;
+        }
+
+        public void SaveKillList(IEnumerable<string> killApps)
+        {
+            try { File.WriteAllLines(_killFile, killApps.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)); }
+            catch (Exception ex) { _logError($"SaveKillList: {ex.Message}"); }
+        }
+
+        public HashSet<string> LoadRemovedDefaults() => DefaultPolicy.LoadRemoved(_baseDir);
+
+        public void SaveRemovedDefaults(IEnumerable<string> removed) => DefaultPolicy.SaveRemoved(_baseDir, removed);
+
+        /// <summary>
+        /// Seeds the built-in defaults (adopted block list, default process blocks,
+        /// default kill list) into the given collections. Entries the user explicitly
+        /// removed (recorded in defaults_removed.txt) are never re-added, and existing
+        /// user entries always win over defaults.
+        /// </summary>
+        public void SeedDefaults(Dictionary<string, BlockedIPMetadata> blocked, HashSet<string> killApps, HashSet<string> removedDefaults)
+        {
+            try
+            {
+                foreach (var line in DefaultPolicy.DefaultBlockedIps)
+                {
+                    var parts = line.Split('|');
+                    string key = parts[0].Trim();
+                    if (string.IsNullOrEmpty(key)) continue;
+                    if (removedDefaults.Contains(DefaultPolicy.BlockKey(key)) || blocked.ContainsKey(key)) continue;
+
+                    string app = parts.Length >= 2 ? parts[1].Trim() : "Unknown";
+                    DateTime timestamp = DateTime.Now;
+                    if (parts.Length >= 3 && DateTime.TryParse(parts[2].Trim(), out var dt)) timestamp = dt;
+                    blocked[key] = new BlockedIPMetadata { Application = app, Timestamp = timestamp };
+                }
+
+                foreach (var (key, app) in DefaultPolicy.DefaultBlockedProcesses)
+                {
+                    if (removedDefaults.Contains(DefaultPolicy.BlockKey(key)) || blocked.ContainsKey(key)) continue;
+                    blocked[key] = new BlockedIPMetadata { Application = app, Timestamp = DateTime.Now };
+                }
+
+                foreach (var name in DefaultPolicy.DefaultKillProcesses)
+                {
+                    if (removedDefaults.Contains(DefaultPolicy.KillKey(name))) continue;
+                    killApps.Add(name);
+                }
+            }
+            catch (Exception ex) { _logError($"SeedDefaults: {ex.Message}"); }
         }
 
         public void SaveBlocked(Dictionary<string, BlockedIPMetadata> blockedIPs)

@@ -8,6 +8,7 @@ using Microsoft.Win32;
 
 namespace MyFirewall.Services
 {
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public class TelemetryService
     {
         private static TelemetryService? _instance;

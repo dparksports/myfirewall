@@ -24,6 +24,12 @@
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.8" />
   </ItemGroup>
 
+  <!-- Shared default policy (adopted block list / process blocks / kill list) —
+       single source of truth with the Desktop app. -->
+  <ItemGroup>
+    <Compile Include="MyFirewall.Desktop\Services\DefaultPolicy.cs" Link="Services\DefaultPolicy.cs" />
+  </ItemGroup>
+
   <Target Name="CopyManifestSidecar" AfterTargets="Publish">
     <Copy
       SourceFiles="$(MSBuildProjectDirectory)\app.manifest"

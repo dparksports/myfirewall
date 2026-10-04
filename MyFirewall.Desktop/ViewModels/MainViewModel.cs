@@ -24,10 +24,12 @@ namespace MyFirewall.Desktop.ViewModels
         private readonly SystemSettingsService _systemSettingsService;
         private readonly DispatcherTimer _timer;
         private readonly DateTime _startTime = DateTime.Now;
+        private readonly Action<string> _logError;
 
         private Dictionary<string, BlockedIPMetadata> _blockedIPsDict = new();
         private HashSet<string> _ignoredAppsSet = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> _killAppsSet = new(StringComparer.OrdinalIgnoreCase);
 
         // Smart-diff: keyed by ConnectionKey for in-place updates
         private readonly Dictionary<string, ConnectionInfo> _connectionMap = new();
@@ -151,6 +153,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _systemSettingsService.SetLanguageSyncEnabled(value);
                 if (!value) _systemSettingsService.StopProcess("SettingSyncHost");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
                 OnPropertyChanged(nameof(IsLanguageSyncEnabled));
                 AddAlert($"Language Sync {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
             }
@@ -163,6 +166,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _systemSettingsService.SetWidgetsEnabled(value);
                 if (!value) _systemSettingsService.StopProcess("Widgets");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
                 OnPropertyChanged(nameof(IsWidgetsEnabled));
                 AddAlert($"Windows Widgets {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
             }
@@ -175,8 +179,22 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _systemSettingsService.SetSearchHostEnabled(value);
                 if (!value) _systemSettingsService.StopProcess("SearchHost");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
                 OnPropertyChanged(nameof(IsSearchHostEnabled));
                 AddAlert($"SearchHost Box {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
+            }
+        }
+
+        public bool IsSearchHostBackgroundBingEnabled
+        {
+            get => !_systemSettingsService.IsSearchHostBackgroundAndBingDisabled();
+            set
+            {
+                _systemSettingsService.SetSearchHostBackgroundAndBingDisabled(!value);
+                if (!value) _systemSettingsService.StopProcess("SearchHost");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
+                OnPropertyChanged(nameof(IsSearchHostBackgroundBingEnabled));
+                AddAlert($"SearchHost Background & Bing Search {(value ? "enabled" : "disabled")}", AlertSeverity.Info);
             }
         }
 
@@ -187,6 +205,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _systemSettingsService.SetStartMenuExperienceHostEnabled(value);
                 if (!value) _systemSettingsService.StopProcess("StartMenuExperienceHost");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
                 OnPropertyChanged(nameof(IsStartMenuExperienceHostEnabled));
                 AddAlert($"StartMenuExperienceHost {(value ? "enabled" : "removed")}", AlertSeverity.Info);
             }
@@ -199,6 +218,7 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _systemSettingsService.SetShellExperienceHostEnabled(value);
                 if (!value) _systemSettingsService.StopProcess("ShellExperienceHost");
+                _systemSettingsService.SetHardeningDefaultsEnabled(false);
                 OnPropertyChanged(nameof(IsShellExperienceHostEnabled));
                 AddAlert($"ShellExperienceHost {(value ? "enabled" : "removed")}", AlertSeverity.Info);
             }
@@ -273,6 +293,7 @@ namespace MyFirewall.Desktop.ViewModels
                 try { File.AppendAllText(Path.Combine(logDir, "crash.log"), $"[{DateTime.Now:s}] {msg}\n"); }
                 catch { /* swallow if we can't even write the crash log */ }
             };
+            _logError = logError;
 
             _geoIpService         = new GeoIpService();
             _dataService          = new DataService(logError);
@@ -319,6 +340,11 @@ namespace MyFirewall.Desktop.ViewModels
             }
             catch { }
 
+            // Apply hardening defaults (language sync, widgets, SearchHost, StartMenu/Shell
+            // hosts disabled) + the kill list, then firewall-block default-blocked processes.
+            ApplyStartupHardening();
+            ApplyDefaultProcessFirewallBlocks();
+
             try
             {
                 _networkMonitor.Start();
@@ -351,8 +377,72 @@ namespace MyFirewall.Desktop.ViewModels
             var data = _dataService.LoadData();
             _blockedIPsDict = data.BlockedIPs;
             _ignoredAppsSet = data.IgnoredApps;
+            _killAppsSet    = _dataService.LoadKillList();
+
+            // Adopt the built-in default policy (current block list, default process
+            // blocks, default kill list). Explicit user opt-outs are never re-added.
+            var removedDefaults = _dataService.LoadRemovedDefaults();
+            _dataService.SeedDefaults(_blockedIPsDict, _killAppsSet, removedDefaults);
+            _dataService.SaveBlocked(_blockedIPsDict);
+            _dataService.SaveKillList(_killAppsSet);
 
             SyncObservables();
+        }
+
+        /// <summary>
+        /// Applies the startup hardening defaults (language sync, widgets, SearchHost box,
+        /// SearchHost background &amp; Bing search, StartMenuExperienceHost, ShellExperienceHost
+        /// — all disabled) and the default kill list, unless the user has manually taken
+        /// control of any toggle (opt-out recorded in the master switch).
+        /// </summary>
+        private void ApplyStartupHardening()
+        {
+            try
+            {
+                if (!_systemSettingsService.IsHardeningDefaultsEnabled()) return;
+
+                _systemSettingsService.ApplyHardeningDefaults(_killAppsSet);
+                AddAlert("Hardening defaults applied: language sync, widgets, SearchHost box/background & Bing, StartMenuExperienceHost and ShellExperienceHost disabled.", AlertSeverity.Info);
+            }
+            catch (Exception ex)
+            {
+                _logError($"ApplyStartupHardening: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Applies app-level firewall rules for blocked process names already running at
+        /// launch (mirrors the CLI's ApplyProactiveProcessBlocks), so default-blocked
+        /// processes such as MpCmdRun / MsMpEng / StartMenuExperienceHost are isolated
+        /// even before they make their first connection.
+        /// </summary>
+        private void ApplyDefaultProcessFirewallBlocks()
+        {
+            foreach (var procName in _blockedProcessNames.ToList())
+            {
+                try
+                {
+                    foreach (var proc in Process.GetProcessesByName(procName))
+                    {
+                        try
+                        {
+                            string? path = null;
+                            try { path = proc.MainModule?.FileName; } catch { /* access denied for protected processes */ }
+                            if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+
+                            if (_firewallService.AddBlockProcessRule(procName, path))
+                            {
+                                AddAlert($"Startup block: {procName} (PID {proc.Id}) — app-level firewall rule applied.", AlertSeverity.Warning);
+                            }
+                        }
+                        finally { proc.Dispose(); }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logError($"ApplyDefaultProcessFirewallBlocks [{procName}]: {ex.Message}");
+                }
+            }
         }
 
         private void RebuildBlockedProcessNames()
@@ -589,6 +679,14 @@ namespace MyFirewall.Desktop.ViewModels
                     _firewallService.RemoveBlockRule(ip);
                 else
                     _firewallService.RemoveBlockProcessRule(ip);
+
+                // Remember explicit opt-outs so startup seeding never re-adds a default entry.
+                if (DefaultPolicy.IsDefaultBlockedKey(ip))
+                {
+                    var removed = _dataService.LoadRemovedDefaults();
+                    if (removed.Add(DefaultPolicy.BlockKey(ip)))
+                        _dataService.SaveRemovedDefaults(removed);
+                }
 
                 _dataService.SaveBlocked(_blockedIPsDict);
                 SyncObservables();

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1600px; height: 1040px; overflow: hidden;
+    font-family: "Segoe UI", "Segoe UI Emoji", sans-serif;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(34,211,238,.12), transparent 60%),
+      linear-gradient(165deg, #0a0f1c 0%, #0d1526 55%, #0a101e 100%);
+    color: #e6edf6;
+    display: flex; flex-direction: column;
+    padding: 44px 60px;
+  }
+  .grid-bg {
+    position: absolute; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(148,163,184,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,163,184,.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .content { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100%; }
+
+  h1 { font-size: 38px; font-weight: 800; letter-spacing: 1px; }
+  h1 .accent { color: #22d3ee; }
+  .subtitle { font-size: 17px; color: #94a3b8; margin-top: 4px; }
+
+  .diagram { flex: 1; display: flex; gap: 26px; margin-top: 28px; }
+  .main-col { flex: 1; display: flex; flex-direction: column; }
+
+  .layer {
+    border: 1px solid rgba(148,163,184,.20);
+    border-radius: 14px;
+    background: rgba(15,23,42,.72);
+    padding: 16px 20px 18px;
+  }
+  .layer-title {
+    font-size: 14px; font-weight: 700; letter-spacing: 2.5px;
+    text-transform: uppercase; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .layer-title .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ac); box-shadow: 0 0 10px var(--ac); }
+  .boxes { display: flex; gap: 14px; }
+  .box {
+    flex: 1; border: 1px solid var(--bc, rgba(148,163,184,.30));
+    border-radius: 10px; padding: 12px 14px;
+    background: var(--bgc, rgba(30,41,59,.55));
+  }
+  .box h3 { font-size: 16.5px; font-weight: 700; color: var(--tc, #e6edf6); margin-bottom: 4px; }
+  .box p { font-size: 12.8px; line-height: 1.45; color: #8fa1b8; }
+  .box code { font-family: Consolas, monospace; font-size: 12px; color: #7dd3fc; }
+
+  .arrow-row {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 9px 0; color: #475569; font-size: 15px;
+  }
+  .arrow-line { width: 2px; height: 14px; background: linear-gradient(#22d3ee55, #22d3ee); }
+  .arrow-label {
+    font-size: 12.5px; color: #64748b; font-style: italic;
+    border: 1px dashed rgba(148,163,184,.25); padding: 2px 12px; border-radius: 10px;
+  }
+
+  .l-front { --ac: #34d399; }
+  .l-core  { --ac: #22d3ee; }
+  .l-enf   { --ac: #f59e0b; }
+  .l-kern  { --ac: #ef4444; }
+
+  .side-col {
+    width: 360px; display: flex; flex-direction: column; gap: 18px;
+  }
+  .side-card {
+    border: 1px dashed rgba(125,211,252,.40);
+    border-radius: 14px; padding: 18px 20px;
+    background: rgba(34,211,238,.04);
+    flex: 1;
+  }
+  .side-card h3 {
+    font-size: 14px; letter-spacing: 2px; text-transform: uppercase;
+    color: #7dd3fc; margin-bottom: 12px;
+  }
+  .file-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 11px;
+  }
+  .fname {
+    font-family: Consolas, monospace; font-size: 14px; color: #7dd3fc;
+    background: rgba(34,211,238,.08); border: 1px solid rgba(125,211,252,.35);
+    border-radius: 7px; padding: 4px 10px; white-space: nowrap;
+  }
+  .fdesc { font-size: 12.5px; color: #8fa1b8; line-height: 1.35; }
+
+  .flow-note {
+    margin-top: 18px; border-top: 1px solid rgba(148,163,184,.16);
+    padding-top: 16px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .flow-note .txt { font-size: 13.5px; color: #64748b; }
+  .flow-note .txt b { color: #94a3b8; }
+  .made { font-size: 13.5px; color: #64748b; }
+</style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="content">
+
+    <div>
+      <h1>MY<span class="accent">FIREWALL</span> — SYSTEM ARCHITECTURE</h1>
+      <div class="subtitle">From kernel trace events to enforced firewall rules — every layer native, every decision local.</div>
+    </div>
+
+    <div class="diagram">
+      <div class="main-col">
+
+        <div class="layer l-front">
+          <div class="layer-title"><span class="dot"></span>Frontends</div>
+          <div class="boxes">
+            <div class="box" style="--tc:#34d399">
+              <h3>CLI Dashboard</h3>
+              <p>Spectre.Console · live TCP tables · <code>B</code> block · <code>I</code> ignore · <code>K</code> kill · <code>S</code> system settings · <code>R</code> restore rules</p>
+            </div>
+            <div class="box" style="--tc:#34d399">
+              <h3>WPF Desktop Control Center</h3>
+              <p>MVVM dark dashboard · search &amp; smart-diff grid · process intelligence · one-click hardening toggles</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-row"><span class="arrow-line"></span><span class="arrow-label">commands &amp; policy</span><span class="arrow-line"></span></div>
+
+        <div class="layer l-core">
+          <div class="layer-title"><span class="dot"></span>Core Services</div>
+          <div class="boxes">
+            <div class="box">
+              <h3>NetworkMonitorService</h3>
+              <p><code>TraceEventSession</code> kernel provider · IPv4/IPv6 TCP table via <code>iphlpapi</code> · socket-to-PID correlation</p>
+            </div>
+            <div class="box">
+              <h3>ProcessMetadataService</h3>
+              <p>Executable path · parent ancestry · Authenticode signature status</p>
+            </div>
+            <div class="box">
+              <h3>DefaultPolicy + DataService</h3>
+              <p>Seed defaults · honor opt-outs · persist policy files</p>
+            </div>
+            <div class="box">
+              <h3>GeoIpService</h3>
+              <p>Cached country / ASN / reverse-DNS enrichment</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-row"><span class="arrow-line"></span><span class="arrow-label">enforcement</span><span class="arrow-line"></span></div>
+
+        <div class="layer l-enf">
+          <div class="layer-title"><span class="dot"></span>Enforcement</div>
+          <div class="boxes">
+            <div class="box" style="--tc:#f59e0b">
+              <h3>FirewallService</h3>
+              <p><code>INetFwPolicy2</code> COM · IP blocks (TCP/UDP × IN/OUT) · app blocks via <code>ApplicationName</code> / <code>LocalAppPackageId</code></p>
+            </div>
+            <div class="box" style="--tc:#f59e0b">
+              <h3>AutoEnforce Loop</h3>
+              <p>New destination of a blocked process → instant rule + TCP reset (<code>SetTcpEntry</code>)</p>
+            </div>
+            <div class="box" style="--tc:#f59e0b">
+              <h3>SystemSettingsService</h3>
+              <p>Hardening registry policies · IFEO host disables · kill list</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-row"><span class="arrow-line"></span><span class="arrow-label">kernel &amp; os</span><span class="arrow-line"></span></div>
+
+        <div class="layer l-kern">
+          <div class="layer-title"><span class="dot"></span>Windows Kernel &amp; OS</div>
+          <div class="boxes">
+            <div class="box" style="--tc:#fca5a5">
+              <h3>ETW Kernel Provider</h3>
+              <p><code>Kernel.NetworkTCPIP</code> + <code>Process</code> keywords — per-PID byte counters, spawn events</p>
+            </div>
+            <div class="box" style="--tc:#fca5a5">
+              <h3>Windows Filtering Platform</h3>
+              <p>WFP applies block rules at the adapter — zero-escape network isolation</p>
+            </div>
+            <div class="box" style="--tc:#fca5a5">
+              <h3>Registry Policy Store</h3>
+              <p><code>Policies\MyFirewall</code> · SettingSync · Dsh · Explorer · BackgroundAccessApplications</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="side-col">
+        <div class="side-card">
+          <h3>Portable Policy Files</h3>
+          <div class="file-row"><span class="fname">blocked.txt</span><span class="fdesc">IP &amp; process block entries — IP|process|timestamp</span></div>
+          <div class="file-row"><span class="fname">ignored.txt</span><span class="fdesc">Trusted apps hidden from the live feed</span></div>
+          <div class="file-row"><span class="fname">kill.txt</span><span class="fdesc">Processes terminated when hardening applies</span></div>
+          <div class="file-row"><span class="fname">defaults_removed.txt</span><span class="fdesc">Opt-outs — defaults never fight the user</span></div>
+        </div>
+        <div class="side-card" style="border-color: rgba(52,211,153,.45); background: rgba(52,211,153,.04);">
+          <h3 style="color:#34d399">Default Posture (v5.7.28+)</h3>
+          <div class="file-row"><span class="fdesc">&#9679; Adopted IP block list seeded on first run</span></div>
+          <div class="file-row"><span class="fdesc">&#9679; <b style="color:#e6edf6">MpCmdRun · MsMpEng · StartMenuExperienceHost</b> blocked by name</span></div>
+          <div class="file-row"><span class="fdesc">&#9679; Language sync, Widgets, SearchHost, StartMenu &amp; Shell hosts disabled</span></div>
+          <div class="file-row"><span class="fdesc">&#9679; Master switch: <code style="color:#7dd3fc">Policies\MyFirewall\ApplyHardeningDefaults</code></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-note">
+      <div class="txt"><b>ETW event</b> → metadata enrich → policy match → COM rule → WFP drop — typically &lt; 50&nbsp;ms end to end.</div>
+      <div class="made">dparksports/myfirewall · MIT License</div>
+    </div>
+
+  </div>
+</body>
+</html>

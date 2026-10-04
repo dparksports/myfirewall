@@ -1,8 +1,0 @@
-autocommand
-chrome
-myfirewall
-agy
-myfirewall.desktop
-language_server_windows_x64
-antigravity ide
-node

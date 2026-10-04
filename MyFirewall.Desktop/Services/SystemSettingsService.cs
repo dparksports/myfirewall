@@ -99,6 +99,121 @@ namespace MyFirewall.Desktop.Services
             catch (Exception ex) { _logError($"SetSearchHostEnabled: {ex.Message}"); }
         }
 
+        public bool IsSearchHostBackgroundAndBingDisabled()
+        {
+            try
+            {
+                using var bgKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\MicrosoftWindows.Client.CBS_cw5n1h2txyew");
+                bool bgDisabled = false;
+                if (bgKey != null)
+                {
+                    var d = bgKey.GetValue("Disabled");
+                    var dbu = bgKey.GetValue("DisabledByUser");
+                    if (d is int di && di == 1 && dbu is int dbui && dbui == 1)
+                    {
+                        bgDisabled = true;
+                    }
+                }
+
+                using var expKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Policies\Microsoft\Windows\Explorer");
+                bool bingDisabled = false;
+                if (expKey != null)
+                {
+                    var val = expKey.GetValue("DisableSearchBoxSuggestions");
+                    if (val is int i && i == 1)
+                    {
+                        bingDisabled = true;
+                    }
+                }
+
+                return bgDisabled && bingDisabled;
+            }
+            catch { return false; }
+        }
+
+        public void SetSearchHostBackgroundAndBingDisabled(bool disable)
+        {
+            try
+            {
+                using var bgKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\MicrosoftWindows.Client.CBS_cw5n1h2txyew");
+                bgKey.SetValue("Disabled", disable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+                bgKey.SetValue("DisabledByUser", disable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+
+                using var expKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Policies\Microsoft\Windows\Explorer");
+                if (disable)
+                {
+                    expKey.SetValue("DisableSearchBoxSuggestions", 1, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+                else
+                {
+                    try { expKey.DeleteValue("DisableSearchBoxSuggestions", false); } catch { }
+                }
+
+                using var searchKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Search");
+                if (disable)
+                {
+                    searchKey.SetValue("BingSearchEnabled", 0, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+                else
+                {
+                    try { searchKey.DeleteValue("BingSearchEnabled", false); } catch { }
+                }
+            }
+            catch (Exception ex) { _logError($"SetSearchHostBackgroundAndBingDisabled: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Master switch for the startup hardening defaults (HKLM\SOFTWARE\Policies\MyFirewall).
+        /// Absent value means enabled: defaults apply until the user manually changes a
+        /// toggle, which records an opt-out so startup stops re-asserting.
+        /// </summary>
+        public bool IsHardeningDefaultsEnabled()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\MyFirewall");
+                if (key != null)
+                {
+                    var val = key.GetValue("ApplyHardeningDefaults");
+                    if (val is int i && i == 0) return false;
+                }
+                return true;
+            }
+            catch { return true; }
+        }
+
+        public void SetHardeningDefaultsEnabled(bool enable)
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Policies\MyFirewall");
+                key.SetValue("ApplyHardeningDefaults", enable ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            }
+            catch (Exception ex) { _logError($"SetHardeningDefaultsEnabled: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Applies the full hardening default set: language sync, Windows widgets,
+        /// SearchHost box, SearchHost background activity &amp; Bing search suggestions,
+        /// StartMenuExperienceHost and ShellExperienceHost — all disabled — then
+        /// terminates the given kill-list processes. Idempotent.
+        /// </summary>
+        public void ApplyHardeningDefaults(IEnumerable<string>? killList = null)
+        {
+            SetLanguageSyncEnabled(false);
+            SetWidgetsEnabled(false);
+            SetSearchHostEnabled(false);
+            SetSearchHostBackgroundAndBingDisabled(true);
+            SetStartMenuExperienceHostEnabled(false);
+            SetShellExperienceHostEnabled(false);
+
+            if (killList != null)
+            {
+                foreach (var name in killList)
+                    StopProcess(name);
+            }
+        }
+
         public bool IsStartMenuExperienceHostEnabled()
         {
             try
