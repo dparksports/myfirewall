@@ -227,7 +227,7 @@ if ($DryRun) {
         -Method      Post `
         -Uri         "https://api.github.com/repos/$Owner/$Repo/releases" `
         -Headers     $Headers `
-        -Body        $Body `
+        -Body        ([System.Text.Encoding]::UTF8.GetBytes($Body)) `
         -ContentType "application/json"
 
     Write-OK "Release created: $($Release.html_url)"
