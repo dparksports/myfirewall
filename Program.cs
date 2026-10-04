@@ -528,6 +528,27 @@ partial class Program
             return parts[0] + "_" + parts[parts.Length - 1];
         }
 
+        /// <summary>
+        /// True when an app-level block rule pair exists for the process name
+        /// (used by the reconciliation sweep to detect drifted/deleted rules).
+        /// </summary>
+        public static bool AppBlockRuleExists(string processName)
+        {
+            lock (_fwLock)
+            {
+                try
+                {
+                    INetFwPolicy2? policy = GetPolicy();
+                    if (policy is null) return false;
+
+                    try { if (policy.Rules.Item($"{FirewallRulePrefix}-{processName}-APP-OUT") != null) return true; } catch { }
+                    try { if (policy.Rules.Item($"{FirewallRulePrefix}-{processName}-APP-IN") != null) return true; } catch { }
+                }
+                catch (Exception ex) { LogCrash($"FirewallManager.AppBlockRuleExists({processName}): {ex.Message}"); }
+                return false;
+            }
+        }
+
         public static void RemoveAppBlockRule(string processName)
         {
             lock (_fwLock)
@@ -622,6 +643,9 @@ partial class Program
         private TraceEventSession? _session;
         private readonly Dictionary<int, long> _bytesSent     = new();
         private readonly Dictionary<int, long> _bytesReceived = new();
+        // PID → bare image name, fed by ETW ProcessStart; survives process exit so
+        // connections whose owner died before a snapshot can still be attributed.
+        private readonly Dictionary<int, string> _pidImage = new();
         private readonly object _lock = new();
         public bool IsRunning { get; private set; }
 
@@ -629,6 +653,20 @@ partial class Program
         public ProcessMonitoringStrategy MonitoringStrategy => _monitoringStrategy;
         public Action<string>? OnProactiveAlert { get; set; }
         private readonly HashSet<int> _proactiveEvaluatedPids = new();
+
+        /// <summary>Set by the host: returns true when a process name is in the blocked set.</summary>
+        public Func<string, bool>? IsBlockedProcess { get; set; }
+
+        /// <summary>Raised in real time when a blocked process touches a remote endpoint
+        /// (pid, processName, remoteIp, isUdp) — enforcement latency drops from one refresh
+        /// interval to milliseconds, and send-and-die beacons are caught even though they
+        /// never appear in a TCP-table snapshot.</summary>
+        public Action<int, string, string, bool>? OnBlockedEndpoint { get; set; }
+
+        public bool TryGetImageName(int pid, out string name)
+        {
+            lock (_lock) return _pidImage.TryGetValue(pid, out name!);
+        }
 
         public void SetMonitoringStrategy(ProcessMonitoringStrategy strategy)
         {
@@ -664,12 +702,11 @@ partial class Program
                 }
 
                 _session = new TraceEventSession(SessionName) { StopOnDispose = true };
-                
-                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP;
-                if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
-                {
-                    keywords |= KernelTraceEventParser.Keywords.Process;
-                }
+
+                // Process keyword is now unconditional: blocked-process spawn handling and
+                // PID→image attribution must work in both monitoring strategies.
+                var keywords = KernelTraceEventParser.Keywords.NetworkTCPIP
+                             | KernelTraceEventParser.Keywords.Process;
                 _session.EnableKernelProvider(keywords);
 
                 _session.Source.Kernel.TcpIpSend += data =>
@@ -683,6 +720,26 @@ partial class Program
                         _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
                 };
 
+                // UDP was previously invisible to both the counters and enforcement.
+                _session.Source.Kernel.UdpIpSend += data =>
+                {
+                    lock (_lock)
+                        _bytesSent[data.ProcessID] = _bytesSent.GetValueOrDefault(data.ProcessID) + data.size;
+                    HandleEndpointEvent(data.ProcessID, data.daddr?.ToString() ?? "", isUdp: true);
+                };
+                _session.Source.Kernel.UdpIpRecv += data =>
+                {
+                    lock (_lock)
+                        _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
+                };
+
+                // Real-time TCP connect enforcement — a new destination for a blocked
+                // process is firewall-blocked the moment the SYN leaves, not on the next scan.
+                _session.Source.Kernel.TcpIpConnect += data =>
+                {
+                    HandleEndpointEvent(data.ProcessID, data.daddr?.ToString() ?? "", isUdp: false);
+                };
+
                 _session.Source.Kernel.ProcessStart += data =>
                 {
                     if (data.ProcessID <= 0) return;
@@ -690,6 +747,8 @@ partial class Program
                     string imageName     = data.ImageFileName ?? string.Empty;
                     string bareImageName = Path.GetFileNameWithoutExtension(imageName);
                     bool   isWebView2    = imageName.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase);
+
+                    lock (_lock) _pidImage[data.ProcessID] = bareImageName;
 
                     if (isWebView2 && _monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
                     {
@@ -700,6 +759,16 @@ partial class Program
                     {
                         // Any other blocked process: apply app-level firewall rule before first packet
                         Task.Run(() => HandleBlockedProcessSpawned(data.ProcessID, bareImageName));
+                    }
+                };
+
+                _session.Source.Kernel.ProcessStop += data =>
+                {
+                    lock (_lock)
+                    {
+                        _pidImage.Remove(data.ProcessID);
+                        _bytesSent.Remove(data.ProcessID);
+                        _bytesReceived.Remove(data.ProcessID);
                     }
                 };
 
@@ -901,6 +970,29 @@ partial class Program
             }
         }
 
+        /// <summary>
+        /// ETW event path: attribute a connect/send event to a process image via the
+        /// PID map and raise OnBlockedEndpoint when the process is in the blocked set.
+        /// Runs on the ETW pump thread — handlers must be fast/non-blocking.
+        /// </summary>
+        private void HandleEndpointEvent(int pid, string remoteAddr, bool isUdp)
+        {
+            var handler = OnBlockedEndpoint;
+            var predicate = IsBlockedProcess;
+            if (handler == null || predicate == null) return;
+            if (string.IsNullOrEmpty(remoteAddr)) return;
+            if (remoteAddr.StartsWith("127.") || remoteAddr == "0.0.0.0" || remoteAddr == "::") return;
+
+            string name;
+            lock (_lock)
+            {
+                if (!_pidImage.TryGetValue(pid, out name!)) return;
+            }
+            if (string.IsNullOrEmpty(name) || !predicate(name)) return;
+
+            handler(pid, name, remoteAddr, isUdp);
+        }
+
         public (long Sent, long Received) GetStats(int pid)
         {
             lock (_lock)
@@ -928,8 +1020,13 @@ partial class Program
     #region State
 
     static List<string>              _ignoredProcesses    = new();
-    static Dictionary<string, BlockedIPMetadata> _blockedIPs  = new();
+    // Concurrent: mutated from the UI thread AND from ETW event enforcement tasks.
+    static System.Collections.Concurrent.ConcurrentDictionary<string, BlockedIPMetadata> _blockedIPs  = new();
     static HashSet<string>           _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
+    // name → executable path of every blocked process that has an app-level rule;
+    // drives the reconciliation sweep and symmetric un-blocking.
+    static Dictionary<string, string> _appRulePaths       = new(StringComparer.OrdinalIgnoreCase);
+    static DateTime                  _lastSweep          = DateTime.MinValue;
     static System.Collections.Concurrent.ConcurrentDictionary<string, string> _domainCache  = new();
     static Dictionary<string, DateTime> _connectionStartTimes = new();
     static Dictionary<string, string> _socketHistory = new();
@@ -998,6 +1095,30 @@ partial class Program
             }
         };
 
+        // Real-time enforcement: a blocked process touching a new destination is
+        // firewall-blocked the moment the event arrives (milliseconds, not one
+        // refresh interval), including UDP and send-and-die beacons.
+        _etwTracker.IsBlockedProcess = name => _blockedProcessNames.Contains(name);
+        _etwTracker.OnBlockedEndpoint = (pid, name, remoteIp, isUdp) =>
+        {
+            if (string.IsNullOrEmpty(remoteIp) || _blockedIPs.ContainsKey(remoteIp)) return;
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (!FirewallManager.AddBlockRule(remoteIp, name)) return;
+                    _blockedIPs[remoteIp] = new BlockedIPMetadata { ProcessName = name, Timestamp = DateTime.Now };
+                    RebuildBlockedProcessNames();
+                    SaveBlockList();
+                    ResetConnectionsToIp(remoteIp);
+                    ResetConnectionsForPid(pid);
+                    LogAlert($"EVENT-BLOCK{(isUdp ? " (UDP)" : "")}: [white]{Markup.Escape(name)}[/] → [yellow]{remoteIp}[/]");
+                }
+                catch (Exception ex) { LogCrash($"Event enforcement for {remoteIp}: {ex.Message}"); }
+            });
+        };
+
         try { _etwTracker.Start(); }
         catch (Exception ex)
         {
@@ -1027,6 +1148,13 @@ partial class Program
                         _lastConnections = GetTcpConnections();
                         AutoEnforceBlockRules(_lastConnections);
                         lastRefresh = DateTime.Now;
+                    }
+
+                    // Reconciliation sweep (~30s): repair drifted/deleted app-level rules
+                    if ((DateTime.Now - _lastSweep).TotalSeconds >= 30)
+                    {
+                        _lastSweep = DateTime.Now;
+                        ReconcileBlockedProcessRules();
                     }
 
                     int keysPolled = 0;
@@ -1095,6 +1223,87 @@ partial class Program
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Stops chasing IPs for processes we've already condemned: the moment a process
+    /// name is in the blocked set, resolve its executable and apply an app-level
+    /// ANY-protocol firewall rule so EVERY destination (new IPs, UDP included) is
+    /// blocked by the firewall itself. Cached per name; retried on later rebuilds
+    /// while the process isn't running (no path known yet).
+    /// </summary>
+    static void EnsureAppBlockRule(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return;
+        if (processName is "Unknown" or "Idle") return;
+        if (_appRulePaths.ContainsKey(processName)) return;
+
+        string? path = null;
+        try
+        {
+            foreach (var proc in Process.GetProcessesByName(processName))
+            {
+                try { path ??= proc.MainModule?.FileName; }
+                catch { /* access denied for elevated/protected processes */ }
+                finally { proc.Dispose(); }
+                if (!string.IsNullOrEmpty(path)) break;
+            }
+        }
+        catch { }
+
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return; // not cached — retried on next rebuild
+
+        if (FirewallManager.AddAppBlockRule(path, processName))
+        {
+            _appRulePaths[processName] = path;
+            LogAlert($"APP-BLOCK: [white]{Markup.Escape(processName)}[/] — [red]app-level rule applied[/] (all destinations blocked)");
+        }
+    }
+
+    /// <summary>
+    /// Reconciliation sweep (~30s): re-asserts app-level rules for every blocked
+    /// process, repairing rules deleted by other tools or policy refresh.
+    /// </summary>
+    static void ReconcileBlockedProcessRules()
+    {
+        foreach (var kvp in _appRulePaths.ToList())
+        {
+            if (FirewallManager.AppBlockRuleExists(kvp.Key)) continue;
+
+            if (FirewallManager.AddAppBlockRule(kvp.Value, kvp.Key))
+                LogAlert($"DRIFT: [yellow]{Markup.Escape(kvp.Key)}[/] app-level rule was missing — re-applied");
+            else
+                _appRulePaths.Remove(kvp.Key);
+        }
+    }
+
+    /// <summary>
+    /// Symmetric un-blocking: when an entry is removed, drop its app-level rule too,
+    /// so un-blocking a process actually restores its network access.
+    /// </summary>
+    static void PruneAppRule(string removedKey, string attributedProcess)
+    {
+        if (IsValidIP(removedKey))
+        {
+            // IP entry: keep the app rule while any other entry still references the process.
+            if (string.IsNullOrWhiteSpace(attributedProcess) || attributedProcess is "Unknown" or "Idle") return;
+            bool stillReferenced =
+                _blockedIPs.Values.Any(v => v.ProcessName.Equals(attributedProcess, StringComparison.OrdinalIgnoreCase)) ||
+                _blockedProcessNames.Contains(attributedProcess);
+            if (stillReferenced) return;
+            RemoveAppRuleFor(attributedProcess);
+        }
+        else
+        {
+            RemoveAppRuleFor(removedKey); // explicit process entry removed
+        }
+    }
+
+    static void RemoveAppRuleFor(string processName)
+    {
+        if (!_appRulePaths.Remove(processName)) return;
+        FirewallManager.RemoveAppBlockRule(processName);
+        LogAlert($"INFO: App-level rule removed for [white]{Markup.Escape(processName)}[/]");
     }
 
     #endregion
@@ -1264,7 +1473,13 @@ partial class Program
                         else
                             pName = "Idle";
                     }
-                    catch { pName = "Unknown"; }
+                    catch
+                    {
+                        // Process already exited (e.g. a send-and-die beacon leaving only a
+                        // TIME_WAIT socket): fall back to the ETW PID→image map so
+                        // blocked-process attribution still works.
+                        pName = (_etwTracker != null && _etwTracker.TryGetImageName(pid, out var img)) ? img : "Unknown";
+                    }
 
                     if ((pid == 0 || pName == "Idle" || pName == "Unknown") && _socketHistory.TryGetValue(socketKey, out string? originalName))
                     {
@@ -1531,6 +1746,11 @@ partial class Program
                 }
             }
         }
+
+        // Escalate to app-level rules: a blocked process gets an ANY-protocol
+        // application rule so new destinations never need chasing.
+        foreach (var name in _blockedProcessNames)
+            EnsureAppBlockRule(name);
     }
 
     /// <summary>

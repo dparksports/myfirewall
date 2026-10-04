@@ -917,10 +917,15 @@ static partial class Program
         if (_cursor < 0 || _cursor >= keys.Count) return;
 
         string key = keys[_cursor];
-        _blockedIPs.Remove(key);
+        _blockedIPs.TryGetValue(key, out var metadata);
+        _blockedIPs.TryRemove(key, out _);
 
         if (IsValidIP(key)) FirewallManager.RemoveBlockRule(key);
         else FirewallManager.RemoveAppBlockRule(key);
+
+        // Symmetric un-blocking: drop the app-level rule when nothing references
+        // the process anymore, so un-blocking actually restores its network access.
+        PruneAppRule(key, metadata?.ProcessName ?? "Unknown");
 
         // Remember explicit opt-outs so default-policy seeding never re-adds them.
         if (DefaultPolicy.IsDefaultBlockedKey(key))

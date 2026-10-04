@@ -31,6 +31,11 @@ namespace MyFirewall.Desktop.ViewModels
         private HashSet<string> _blockedProcessNames = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _killAppsSet = new(StringComparer.OrdinalIgnoreCase);
 
+        // name → path of blocked processes with an app-level rule; drives the
+        // reconciliation sweep that repairs drifted/deleted rules every ~30s.
+        private readonly Dictionary<string, string> _appRulePaths = new(StringComparer.OrdinalIgnoreCase);
+        private int _sweepTicks;
+
         // Smart-diff: keyed by ConnectionKey for in-place updates
         private readonly Dictionary<string, ConnectionInfo> _connectionMap = new();
 
@@ -309,6 +314,33 @@ namespace MyFirewall.Desktop.ViewModels
                 }));
             };
 
+            // Real-time enforcement: a blocked process touching a new destination is
+            // firewall-blocked the moment the ETW event arrives (milliseconds, not one
+            // refresh interval), including UDP and send-and-die beacons.
+            _networkMonitor.IsBlockedProcess = name => _blockedProcessNames.Contains(name);
+            _networkMonitor.OnAppRuleEnsured = (name, path) => _appRulePaths[name] = path;
+            _networkMonitor.OnBlockedEndpointObserved = (remoteIp, name, pid, isUdp) =>
+            {
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (string.IsNullOrEmpty(remoteIp) || _blockedIPsDict.ContainsKey(remoteIp)) return;
+                        if (!_firewallService.AddBlockRule(remoteIp, name)) return;
+
+                        _blockedIPsDict[remoteIp] = new BlockedIPMetadata { Application = name, Timestamp = DateTime.Now };
+                        _dataService.SaveBlocked(_blockedIPsDict);
+                        _networkMonitor.ResetConnectionsToIp(remoteIp);
+                        SyncObservables();
+                        AddAlert($"Event-block{(isUdp ? " (UDP)" : "")}: {name} → {remoteIp}", AlertSeverity.Warning);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddAlert($"Event enforcement failed for {remoteIp}: {ex.Message}", AlertSeverity.Critical);
+                    }
+                }));
+            };
+
             // Fix: StopAppCommand uses object parameter so WPF string→int conversion isn't needed
             BlockIPCommand         = new RelayCommand<object>(ExecuteBlockIP);
             BlockProcessCommand    = new RelayCommand<object>(ExecuteBlockProcess);
@@ -432,6 +464,7 @@ namespace MyFirewall.Desktop.ViewModels
 
                             if (_firewallService.AddBlockProcessRule(procName, path))
                             {
+                                _appRulePaths[procName] = path;
                                 AddAlert($"Startup block: {procName} (PID {proc.Id}) — app-level firewall rule applied.", AlertSeverity.Warning);
                             }
                         }
@@ -477,6 +510,19 @@ namespace MyFirewall.Desktop.ViewModels
             catch { /* non-critical */ }
         }
 
+        /// <summary>
+        /// Re-asserts app-level rules for every blocked process; AddBlockProcessRule
+        /// checks rule existence internally, so this only repairs drift.
+        /// </summary>
+        private void ReassertAppRules()
+        {
+            foreach (var kvp in _appRulePaths)
+            {
+                try { _firewallService.AddBlockProcessRule(kvp.Key, kvp.Value); }
+                catch { /* non-critical — retried next sweep */ }
+            }
+        }
+
         private void Timer_Tick(object? sender, EventArgs e)
         {
             IsMonitorActive = _networkMonitor.IsRunning;
@@ -509,6 +555,14 @@ namespace MyFirewall.Desktop.ViewModels
             {
                 _dataService.SaveBlocked(_blockedIPsDict);
                 SyncObservables();
+            }
+
+            // Reconciliation sweep (~30s at the default 2s refresh): re-apply
+            // app-level rules that were deleted by other tools or policy refresh.
+            if (++_sweepTicks >= 15)
+            {
+                _sweepTicks = 0;
+                ReassertAppRules();
             }
 
             // Apply filter (client-side) and smart-diff update

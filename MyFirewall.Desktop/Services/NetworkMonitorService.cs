@@ -40,6 +40,23 @@ namespace MyFirewall.Desktop.Services
         public Action<AlertEntry>? OnProactiveAlert { get; set; }
         private readonly HashSet<int> _proactiveEvaluatedPids = new();
 
+        // PID → bare image name from ETW ProcessStart; survives process exit so
+        // send-and-die beacons leaving only TIME_WAIT sockets stay attributable.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> _pidImage = new();
+
+        /// <summary>Set by the host: true when a process name is in the blocked set.</summary>
+        public Func<string, bool>? IsBlockedProcess { get; set; }
+
+        /// <summary>Raised in real time when a blocked process touches a remote endpoint
+        /// (remoteIp, processName, pid, isUdp) — enforcement drops from one refresh
+        /// interval to milliseconds.</summary>
+        public Action<string, string, int, bool>? OnBlockedEndpointObserved { get; set; }
+
+        /// <summary>Raised (name, path) when an app-level rule is first ensured for a blocked process.</summary>
+        public Action<string, string>? OnAppRuleEnsured { get; set; }
+
+        private readonly HashSet<string> _appRuleEnsured = new(StringComparer.OrdinalIgnoreCase);
+
         public NetworkMonitorService(Action<string> logError, GeoIpService geoIpService)
         {
             _logError = logError;
@@ -102,11 +119,30 @@ namespace MyFirewall.Desktop.Services
                     lock (_lock) _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
                 };
 
+                // UDP was previously invisible to both the counters and enforcement.
+                _session.Source.Kernel.UdpIpSend += data =>
+                {
+                    lock (_lock) _bytesSent[data.ProcessID] = _bytesSent.GetValueOrDefault(data.ProcessID) + data.size;
+                    HandleEndpointEvent(data.ProcessID, data.daddr?.ToString() ?? "", isUdp: true);
+                };
+                _session.Source.Kernel.UdpIpRecv += data =>
+                {
+                    lock (_lock) _bytesReceived[data.ProcessID] = _bytesReceived.GetValueOrDefault(data.ProcessID) + data.size;
+                };
+
+                // Real-time TCP connect enforcement — new destinations for blocked
+                // processes are firewall-blocked the moment the SYN leaves.
+                _session.Source.Kernel.TcpIpConnect += data =>
+                {
+                    HandleEndpointEvent(data.ProcessID, data.daddr?.ToString() ?? "", isUdp: false);
+                };
+
                 _session.Source.Kernel.ProcessStart += data =>
                 {
                     if (data.ProcessID > 0)
                     {
                         string imageName = data.ImageFileName;
+                        _pidImage[data.ProcessID] = System.IO.Path.GetFileNameWithoutExtension(imageName);
                         _metadataService.RegisterProcessStart(data.ProcessID, data.ParentID, imageName);
 
                         if (_monitoringStrategy == ProcessMonitoringStrategy.ProcessStartEtw)
@@ -117,6 +153,11 @@ namespace MyFirewall.Desktop.Services
                             }
                         }
                     }
+                };
+
+                _session.Source.Kernel.ProcessStop += data =>
+                {
+                    _pidImage.TryRemove(data.ProcessID, out _);
                 };
 
                 Task.Run(() =>
@@ -166,6 +207,25 @@ namespace MyFirewall.Desktop.Services
             {
                 _logError($"Proactive evaluation error for PID {pid}: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// ETW event path: attribute a connect/send event to a process image via the
+        /// PID map and raise OnBlockedEndpointObserved when the process is blocked.
+        /// Runs on the ETW pump thread — must be fast and non-blocking.
+        /// </summary>
+        private void HandleEndpointEvent(int pid, string remoteAddr, bool isUdp)
+        {
+            var handler = OnBlockedEndpointObserved;
+            var predicate = IsBlockedProcess;
+            if (handler == null || predicate == null) return;
+            if (string.IsNullOrEmpty(remoteAddr)) return;
+            if (remoteAddr.StartsWith("127.") || remoteAddr == "0.0.0.0" || remoteAddr == "::") return;
+
+            if (!_pidImage.TryGetValue(pid, out var name) || string.IsNullOrEmpty(name)) return;
+            if (!predicate(name)) return;
+
+            handler(remoteAddr, name, pid, isUdp);
         }
 
         public void Stop()
@@ -368,7 +428,12 @@ namespace MyFirewall.Desktop.Services
                     appName = "Idle";
                 }
             }
-            catch { appName = "Unknown"; } // Process died before we could query it
+            catch
+            {
+                // Process died before we could query it — fall back to the ETW PID map
+                // so blocked-process attribution still works for send-and-die beacons.
+                appName = _pidImage.TryGetValue(pid, out var img) ? img : "Unknown";
+            }
 
             // If it's Idle or dead, check our history cache
             if ((pid == 0 || appName == "Idle" || appName == "Unknown") && _socketHistory.TryGetValue(socketKey, out var originalName))
@@ -524,6 +589,11 @@ namespace MyFirewall.Desktop.Services
                 {
                     blockedIPs[conn.Destination] = new BlockedIPMetadata { Application = conn.ApplicationName, Timestamp = DateTime.Now };
                     ResetConnectionsToIp(conn.Destination); // Sever any existing active connections
+
+                    // Escalate to an app-level ANY-protocol rule so every future
+                    // destination (new IPs, UDP) is blocked by the firewall itself.
+                    EnsureAppRule(fwService, conn.ApplicationName, conn.ExecutablePath);
+
                     alerts.Add(new AlertEntry
                     {
                         Message  = $"Blocked new connection to {conn.Destination} from {conn.ApplicationName}",
@@ -533,6 +603,23 @@ namespace MyFirewall.Desktop.Services
             }
 
             return alerts;
+        }
+
+        /// <summary>
+        /// Applies an app-level block rule the first time a blocked process is seen,
+        /// so per-IP chasing becomes a safety net instead of the only defense.
+        /// </summary>
+        private void EnsureAppRule(FirewallService fwService, string processName, string? executablePath)
+        {
+            if (string.IsNullOrWhiteSpace(processName) || processName is "Unknown" or "Idle") return;
+            if (string.IsNullOrWhiteSpace(executablePath) || executablePath == "N/A") return;
+            if (!System.IO.File.Exists(executablePath)) return;
+            if (!_appRuleEnsured.Add(processName)) return;
+
+            if (fwService.AddBlockProcessRule(processName, executablePath))
+                OnAppRuleEnsured?.Invoke(processName, executablePath);
+            else
+                _appRuleEnsured.Remove(processName);
         }
 
         public void Dispose()

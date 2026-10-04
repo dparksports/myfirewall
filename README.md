@@ -23,6 +23,9 @@ MyFirewall watches the Windows kernel directly — every process start and every
 - Direct `HNetCfg.FwPolicy2` / `HNetCfg.FWRule` interop — rule add/remove/enumerate without spawning `powershell.exe`.
 - IP blocks are created as four rules each (TCP/UDP × inbound/outbound); whole-application blocks resolve UWP **Package Family Names** and use native `LocalAppPackageId` isolation for system apps such as `StartMenuExperienceHost`.
 - **AutoEnforce loop** — any new destination IP contacted by a blocked process is firewall-blocked instantly and its live sockets reset via `SetTcpEntry`.
+- **App-level escalation** — the moment a process name is blocked, an ANY-protocol application rule is applied, so *every* destination (new IPs, UDP included) is blocked by the firewall itself; per-IP chasing becomes a safety net.
+- **Event-driven enforcement** — ETW `TcpIpConnect` / `UdpIpSend` events fire enforcement in milliseconds (not on the next 2s scan), catching send-and-die beacons whose sockets never appear in a snapshot; a PID→image map keeps attribution alive after the process exits.
+- **Reconciliation sweep** — every ~30s the app re-asserts blocked processes' app-level rules, repairing anything deleted by other tools.
 
 ### 🖥️ Two frontends, one engine
 - **CLI dashboard** — cursor-driven live tables with tabs, filtering, overlay modals, and a color-coded alert log.
