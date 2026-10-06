@@ -328,7 +328,8 @@ partial class Program
                     // Outbound block
                     INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     outRule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}";
-                    outRule.Description     = $"Auto-blocked by TCP Monitor | process={processName}";
+                    // Windows 11 24H2+/26H2 rejects '|' in rule Description with E_INVALIDARG on Add()
+                    outRule.Description     = $"Auto-blocked by TCP Monitor - process={processName}";
                     outRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     outRule.RemoteAddresses = ip;
                     outRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_OUT;
@@ -341,7 +342,7 @@ partial class Program
                     // being counted by ETW even after the outbound rule is active.
                     INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     inRule.Name            = $"{FirewallRulePrefix}-{processName}-{ip}-IN";
-                    inRule.Description     = $"Auto-blocked (inbound) by TCP Monitor | process={processName}";
+                    inRule.Description     = $"Auto-blocked (inbound) by TCP Monitor - process={processName}";
                     inRule.Protocol        = (int)NET_FW_IP_PROTOCOL.NET_FW_IP_PROTOCOL_ANY;
                     inRule.RemoteAddresses = ip;
                     inRule.Direction       = NET_FW_RULE_DIRECTION.NET_FW_RULE_DIR_IN;
@@ -450,7 +451,7 @@ partial class Program
 
                     INetFwRule outRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     outRule.Name            = outName;
-                    outRule.Description     = $"App-level block (outbound) by TCP Monitor | {processName}";
+                    outRule.Description     = $"App-level block (outbound) by TCP Monitor - {processName}";
                     
                     string? pfn = GetPackageFamilyName(executablePath);
                     if (pfn != null)
@@ -471,7 +472,7 @@ partial class Program
 
                     INetFwRule inRule = (INetFwRule)Activator.CreateInstance(ruleType)!;
                     inRule.Name            = inName;
-                    inRule.Description     = $"App-level block (inbound) by TCP Monitor | {processName}";
+                    inRule.Description     = $"App-level block (inbound) by TCP Monitor - {processName}";
                     
                     if (pfn != null)
                     {
