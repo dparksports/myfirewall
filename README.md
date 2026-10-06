@@ -159,7 +159,7 @@ Windows          ETW kernel provider · Windows Filtering Platform · Registry p
 
 **"Failed to block … Ensure app is running as Administrator"** — this alert isn't always about elevation. The underlying COM error is appended to `crash.log` next to the executable, so check it first.
 
-One known case, fixed in `v2026.10.5`: Windows 11 24H2/26H2 **rejects any firewall rule whose description contains the `|` character**, failing `Rules.Add` with *"Value does not fall within the expected range"* (`E_INVALIDARG`). Older releases embedded `|` in every auto-generated rule description, so on a machine upgraded to 24H2/26H2 every block attempt failed no matter how the app was launched. Re-downloading the latest release (or rebuilding) resolves it — the separator in rule descriptions is now `-`.
+One known case, fixed in `v2026.10.6`: Windows 11 24H2/26H2 **rejects any firewall rule whose description contains the `|` character**, failing `Rules.Add` with *"Value does not fall within the expected range"* (`E_INVALIDARG`). Older releases embedded `|` in every auto-generated rule description, so on a machine upgraded to 24H2/26H2 every block attempt failed no matter how the app was launched. Re-downloading the latest release (or rebuilding) resolves it — the separator in rule descriptions is now `-`.
 
 ---
 
